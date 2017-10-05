@@ -30,7 +30,7 @@
 #include <sys/types.h>
 #include <utils/Errors.h>
 #include <pixelflinger/format.h>
-#include <hardware/hardware.h>
+// #include <hardware/hardware.h>
 
 namespace android {
 

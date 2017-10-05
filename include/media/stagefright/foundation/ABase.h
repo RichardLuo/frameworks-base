@@ -18,8 +18,10 @@
 
 #define A_BASE_H_
 
+#ifndef DISALLOW_EVIL_CONSTRUCTORS
 #define DISALLOW_EVIL_CONSTRUCTORS(name) \
     name(const name &); \
     name &operator=(const name &)
+#endif
 
 #endif  // A_BASE_H_

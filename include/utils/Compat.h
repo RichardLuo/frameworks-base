@@ -25,6 +25,7 @@
 #error "_FILE_OFFSET_BITS < 64; large files are not supported on this platform"
 #endif /* _FILE_OFFSET_BITS < 64 */
 
+#ifndef ARCH_X86
 typedef off_t off64_t;
 
 static inline off64_t lseek64(int fd, off64_t offset, int whence) {
@@ -36,6 +37,8 @@ static inline ssize_t pread64(int fd, void* buf, size_t nbytes, off64_t offset) 
     return pread(fd, buf, nbytes, offset);
 }
 #endif
+
+#endif  // X86
 
 #endif /* !HAVE_OFF64_T */
 

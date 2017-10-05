@@ -20,7 +20,7 @@
 #include <sys/types.h>
 #include <string.h>
 
-#include <hardware/gralloc.h>
+// #include <hardware/gralloc.h>
 #include <system/window.h>
 // FIXME: remove this header, it's for legacy use.  native_window is pulled from frameworks/base/native/include/android/
 #include <android/native_window.h>

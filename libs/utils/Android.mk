@@ -101,7 +101,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libz \
 	liblog \
 	libcutils \
-	libdl
+
 
 LOCAL_MODULE:= libutils
 include $(BUILD_SHARED_LIBRARY)

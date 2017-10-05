@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#ifdef ARCH_X86
+#undef HAVE_ANDROID_OS
+#endif
 
 /*
  * System clock functions.

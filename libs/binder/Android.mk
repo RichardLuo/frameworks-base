@@ -36,6 +36,7 @@ LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
+LOCAL_C_INCLUDES += bionic/libc/kernel/common
 LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
 LOCAL_SRC_FILES := $(sources)
 include $(BUILD_SHARED_LIBRARY)
@@ -44,4 +45,5 @@ include $(CLEAR_VARS)
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
 LOCAL_SRC_FILES := $(sources)
+LOCAL_C_INCLUDES += bionic/libc/kernel/common
 include $(BUILD_STATIC_LIBRARY)

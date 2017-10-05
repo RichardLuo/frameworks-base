@@ -29,5 +29,6 @@
 #define _LIBS_UTILS_LOG_H
 
 #include <cutils/log.h>
+#include <cutils/easymacros.h>
 
 #endif // _LIBS_UTILS_LOG_H
