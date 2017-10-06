@@ -24,17 +24,10 @@
 # undef  nhtos
 # undef  htons
 
-# ifdef HAVE_LITTLE_ENDIAN
-#  define ntohl(x)    ( ((x) << 24) | (((x) >> 24) & 255) | (((x) << 8) & 0xff0000) | (((x) >> 8) & 0xff00) )
-#  define htonl(x)    ntohl(x)
-#  define ntohs(x)    ( (((x) << 8) & 0xff00) | (((x) >> 8) & 255) )
-#  define htons(x)    ntohs(x)
-# else
-#  define ntohl(x)    (x)
-#  define htonl(x)    (x)
-#  define ntohs(x)    (x)
-#  define htons(x)    (x)
-# endif
+# define ntohl(x)    ( ((x) << 24) | (((x) >> 24) & 255) | (((x) << 8) & 0xff0000) | (((x) >> 8) & 0xff00) )
+# define htonl(x)    ntohl(x)
+# define ntohs(x)    ( (((x) << 8) & 0xff00) | (((x) >> 8) & 255) )
+# define htons(x)    ntohs(x)
 #else
 # include <netinet/in.h>
 #endif
@@ -47,8 +40,9 @@ static const char32_t kByteMark = 0x00000080;
 // Surrogates aren't valid for UTF-32 characters, so define some
 // constants that will let us screen them out.
 static const char32_t kUnicodeSurrogateHighStart  = 0x0000D800;
-static const char32_t kUnicodeSurrogateHighEnd    = 0x0000DBFF;
-static const char32_t kUnicodeSurrogateLowStart   = 0x0000DC00;
+// Unused, here for completeness:
+// static const char32_t kUnicodeSurrogateHighEnd = 0x0000DBFF;
+// static const char32_t kUnicodeSurrogateLowStart = 0x0000DC00;
 static const char32_t kUnicodeSurrogateLowEnd     = 0x0000DFFF;
 static const char32_t kUnicodeSurrogateStart      = kUnicodeSurrogateHighStart;
 static const char32_t kUnicodeSurrogateEnd        = kUnicodeSurrogateLowEnd;
@@ -342,7 +336,8 @@ void utf16_to_utf8(const char16_t* src, size_t src_len, char* dst)
     while (cur_utf16 < end_utf16) {
         char32_t utf32;
         // surrogate pairs
-        if ((*cur_utf16 & 0xFC00) == 0xD800) {
+        if((*cur_utf16 & 0xFC00) == 0xD800 && (cur_utf16 + 1) < end_utf16
+                && (*(cur_utf16 + 1) & 0xFC00) == 0xDC00) {
             utf32 = (*cur_utf16++ - 0xD800) << 10;
             utf32 |= *cur_utf16++ - 0xDC00;
             utf32 += 0x10000;
@@ -571,6 +566,36 @@ char16_t* utf8_to_utf16_no_null_terminator(const uint8_t* u8str, size_t u8len, c
 void utf8_to_utf16(const uint8_t* u8str, size_t u8len, char16_t* u16str) {
     char16_t* end = utf8_to_utf16_no_null_terminator(u8str, u8len, u16str);
     *end = 0;
+}
+
+char16_t* utf8_to_utf16_n(const uint8_t* src, size_t srcLen, char16_t* dst, size_t dstLen) {
+    const uint8_t* const u8end = src + srcLen;
+    const uint8_t* u8cur = src;
+    const char16_t* const u16end = dst + dstLen;
+    char16_t* u16cur = dst;
+
+    while (u8cur < u8end && u16cur < u16end) {
+        size_t u8len = utf8_codepoint_len(*u8cur);
+        uint32_t codepoint = utf8_to_utf32_codepoint(u8cur, u8len);
+
+        // Convert the UTF32 codepoint to one or more UTF16 codepoints
+        if (codepoint <= 0xFFFF) {
+            // Single UTF16 character
+            *u16cur++ = (char16_t) codepoint;
+        } else {
+            // Multiple UTF16 characters with surrogates
+            codepoint = codepoint - 0x10000;
+            *u16cur++ = (char16_t) ((codepoint >> 10) + 0xD800);
+            if (u16cur >= u16end) {
+                // Ooops...  not enough room for this surrogate pair.
+                return u16cur-1;
+            }
+            *u16cur++ = (char16_t) ((codepoint & 0x3FF) + 0xDC00);
+        }
+
+        u8cur += u8len;
+    }
+    return u16cur;
 }
 
 }

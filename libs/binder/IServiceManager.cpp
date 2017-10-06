@@ -18,7 +18,6 @@
 
 #include <binder/IServiceManager.h>
 
-#include <utils/Debug.h>
 #include <utils/Log.h>
 #include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
@@ -37,9 +36,11 @@ sp<IServiceManager> defaultServiceManager()
     
     {
         AutoMutex _l(gDefaultServiceManagerLock);
-        if (gDefaultServiceManager == NULL) {
+        while (gDefaultServiceManager == NULL) {
             gDefaultServiceManager = interface_cast<IServiceManager>(
                 ProcessState::self()->getContextObject(NULL));
+            if (gDefaultServiceManager == NULL)
+                sleep(1);
         }
     }
     
@@ -151,12 +152,14 @@ public:
         return reply.readStrongBinder();
     }
 
-    virtual status_t addService(const String16& name, const sp<IBinder>& service)
+    virtual status_t addService(const String16& name, const sp<IBinder>& service,
+            bool allowIsolated)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IServiceManager::getInterfaceDescriptor());
         data.writeString16(name);
         data.writeStrongBinder(service);
+        data.writeInt32(allowIsolated ? 1 : 0);
         status_t err = remote()->transact(ADD_SERVICE_TRANSACTION, data, &reply);
         return err == NO_ERROR ? reply.readExceptionCode() : err;
     }

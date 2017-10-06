@@ -13,4 +13,9 @@ LOCAL_STATIC_LIBRARIES := \
 
 LOCAL_MODULE:= libstorage
 
+LOCAL_CFLAGS += -std=c++11
+
+LOCAL_C_INCLUDES += \
+	bionic/libc/kernel/common
+
 include $(BUILD_STATIC_LIBRARY)

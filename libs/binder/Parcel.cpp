@@ -22,42 +22,60 @@
 #include <binder/IPCThreadState.h>
 #include <binder/Binder.h>
 #include <binder/BpBinder.h>
-#include <utils/Debug.h>
 #include <binder/ProcessState.h>
+#include <binder/TextOutput.h>
+
+#include <errno.h>
+#include <utils/Debug.h>
 #include <utils/Log.h>
 #include <utils/String8.h>
 #include <utils/String16.h>
-#include <utils/TextOutput.h>
 #include <utils/misc.h>
 #include <utils/Flattenable.h>
 #include <cutils/ashmem.h>
 
 #include <private/binder/binder_module.h>
+#include <private/binder/Static.h>
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <limits.h>
 #include <sys/mman.h>
 
 #ifndef INT32_MAX
 #define INT32_MAX ((int32_t)(2147483647))
 #endif
 
+#ifndef SIZE_T_MAX
+#define SIZE_T_MAX  UINT_MAX
+#endif
+
 #define LOG_REFS(...)
 //#define LOG_REFS(...) LOG(LOG_DEBUG, "Parcel", __VA_ARGS__)
+#define LOG_ALLOC(...)
+//#define LOG_ALLOC(...) LOG(LOG_DEBUG, "Parcel", __VA_ARGS__)
 
 // ---------------------------------------------------------------------------
 
-#define PAD_SIZE(s) (((s)+3)&~3)
+// This macro should never be used at runtime, as a too large value
+// of s could cause an integer overflow. Instead, you should always
+// use the wrapper function pad_size()
+#define PAD_SIZE_UNSAFE(s) (((s)+3)&~3)
+
+static size_t pad_size(size_t s) {
+    if (s > (SIZE_T_MAX - 3)) {
+        abort();
+    }
+    return PAD_SIZE_UNSAFE(s);
+}
 
 // Note: must be kept in sync with android/os/StrictMode.java's PENALTY_GATHER
-#define STRICT_MODE_PENALTY_GATHER 0x100
+#define STRICT_MODE_PENALTY_GATHER (0x40 << 16)
 
 // Note: must be kept in sync with android/os/Parcel.java's EX_HAS_REPLY_HEADER
 #define EX_HAS_REPLY_HEADER -128
-
-// Maximum size of a blob to transfer in-place.
-static const size_t IN_PLACE_BLOB_LIMIT = 40 * 1024;
 
 // XXX This can be made public if we want to provide
 // support for typed data.
@@ -69,19 +87,32 @@ struct small_flat_data
 
 namespace android {
 
+static pthread_mutex_t gParcelGlobalAllocSizeLock = PTHREAD_MUTEX_INITIALIZER;
+static size_t gParcelGlobalAllocSize = 0;
+static size_t gParcelGlobalAllocCount = 0;
+
+// Maximum size of a blob to transfer in-place.
+static const size_t BLOB_INPLACE_LIMIT = 16 * 1024;
+
+enum {
+    BLOB_INPLACE = 0,
+    BLOB_ASHMEM_IMMUTABLE = 1,
+    BLOB_ASHMEM_MUTABLE = 2,
+};
+
 void acquire_object(const sp<ProcessState>& proc,
-    const flat_binder_object& obj, const void* who)
+    const flat_binder_object& obj, const void* who, size_t* outAshmemSize)
 {
     switch (obj.type) {
         case BINDER_TYPE_BINDER:
             if (obj.binder) {
                 LOG_REFS("Parcel %p acquiring reference on local %p", who, obj.cookie);
-                static_cast<IBinder*>(obj.cookie)->incStrong(who);
+                reinterpret_cast<IBinder*>(obj.cookie)->incStrong(who);
             }
             return;
         case BINDER_TYPE_WEAK_BINDER:
             if (obj.binder)
-                static_cast<RefBase::weakref_type*>(obj.binder)->incWeak(who);
+                reinterpret_cast<RefBase::weakref_type*>(obj.binder)->incWeak(who);
             return;
         case BINDER_TYPE_HANDLE: {
             const sp<IBinder> b = proc->getStrongProxyForHandle(obj.handle);
@@ -97,28 +128,41 @@ void acquire_object(const sp<ProcessState>& proc,
             return;
         }
         case BINDER_TYPE_FD: {
-            // intentionally blank -- nothing to do to acquire this, but we do
-            // recognize it as a legitimate object type.
+            if (obj.cookie != 0) {
+                if (outAshmemSize != NULL) {
+                    // If we own an ashmem fd, keep track of how much memory it refers to.
+                    int size = ashmem_get_size_region(obj.handle);
+                    if (size > 0) {
+                        *outAshmemSize += size;
+                    }
+                }
+            }
             return;
         }
     }
 
-    LOGD("Invalid object type 0x%08lx", obj.type);
+    LOGD("Invalid object type 0x%08x", obj.type);
 }
 
-void release_object(const sp<ProcessState>& proc,
+void acquire_object(const sp<ProcessState>& proc,
     const flat_binder_object& obj, const void* who)
+{
+    acquire_object(proc, obj, who, NULL);
+}
+
+static void release_object(const sp<ProcessState>& proc,
+    const flat_binder_object& obj, const void* who, size_t* outAshmemSize)
 {
     switch (obj.type) {
         case BINDER_TYPE_BINDER:
             if (obj.binder) {
                 LOG_REFS("Parcel %p releasing reference on local %p", who, obj.cookie);
-                static_cast<IBinder*>(obj.cookie)->decStrong(who);
+                reinterpret_cast<IBinder*>(obj.cookie)->decStrong(who);
             }
             return;
         case BINDER_TYPE_WEAK_BINDER:
             if (obj.binder)
-                static_cast<RefBase::weakref_type*>(obj.binder)->decWeak(who);
+                reinterpret_cast<RefBase::weakref_type*>(obj.binder)->decWeak(who);
             return;
         case BINDER_TYPE_HANDLE: {
             const sp<IBinder> b = proc->getStrongProxyForHandle(obj.handle);
@@ -134,25 +178,40 @@ void release_object(const sp<ProcessState>& proc,
             return;
         }
         case BINDER_TYPE_FD: {
-            if (obj.cookie != (void*)0) close(obj.handle);
+            if (outAshmemSize != NULL) {
+                if (obj.cookie != 0) {
+                    int size = ashmem_get_size_region(obj.handle);
+                    if (size > 0) {
+                        *outAshmemSize -= size;
+                    }
+
+                    close(obj.handle);
+                }
+            }
             return;
         }
     }
 
-    LOGE("Invalid object type 0x%08lx", obj.type);
+    LOGE("Invalid object type 0x%08x", obj.type);
+}
+
+void release_object(const sp<ProcessState>& proc,
+    const flat_binder_object& obj, const void* who)
+{
+    release_object(proc, obj, who, NULL);
 }
 
 inline static status_t finish_flatten_binder(
-    const sp<IBinder>& binder, const flat_binder_object& flat, Parcel* out)
+    const sp<IBinder>& /*binder*/, const flat_binder_object& flat, Parcel* out)
 {
     return out->writeObject(flat, false);
 }
 
-status_t flatten_binder(const sp<ProcessState>& proc,
+status_t flatten_binder(const sp<ProcessState>& /*proc*/,
     const sp<IBinder>& binder, Parcel* out)
 {
     flat_binder_object obj;
-    
+
     obj.flags = 0x7f | FLAT_BINDER_FLAG_ACCEPTS_FDS;
     if (binder != NULL) {
         IBinder *local = binder->localBinder();
@@ -163,27 +222,28 @@ status_t flatten_binder(const sp<ProcessState>& proc,
             }
             const int32_t handle = proxy ? proxy->handle() : 0;
             obj.type = BINDER_TYPE_HANDLE;
+            obj.binder = 0; /* Don't pass uninitialized stack data to a remote process */
             obj.handle = handle;
-            obj.cookie = NULL;
+            obj.cookie = 0;
         } else {
             obj.type = BINDER_TYPE_BINDER;
-            obj.binder = local->getWeakRefs();
-            obj.cookie = local;
+            obj.binder = reinterpret_cast<uintptr_t>(local->getWeakRefs());
+            obj.cookie = reinterpret_cast<uintptr_t>(local);
         }
     } else {
         obj.type = BINDER_TYPE_BINDER;
-        obj.binder = NULL;
-        obj.cookie = NULL;
+        obj.binder = 0;
+        obj.cookie = 0;
     }
-    
+
     return finish_flatten_binder(binder, obj, out);
 }
 
-status_t flatten_binder(const sp<ProcessState>& proc,
+status_t flatten_binder(const sp<ProcessState>& /*proc*/,
     const wp<IBinder>& binder, Parcel* out)
 {
     flat_binder_object obj;
-    
+
     obj.flags = 0x7f | FLAT_BINDER_FLAG_ACCEPTS_FDS;
     if (binder != NULL) {
         sp<IBinder> real = binder.promote();
@@ -196,16 +256,17 @@ status_t flatten_binder(const sp<ProcessState>& proc,
                 }
                 const int32_t handle = proxy ? proxy->handle() : 0;
                 obj.type = BINDER_TYPE_WEAK_HANDLE;
+                obj.binder = 0; /* Don't pass uninitialized stack data to a remote process */
                 obj.handle = handle;
-                obj.cookie = NULL;
+                obj.cookie = 0;
             } else {
                 obj.type = BINDER_TYPE_WEAK_BINDER;
-                obj.binder = binder.get_refs();
-                obj.cookie = binder.unsafe_get();
+                obj.binder = reinterpret_cast<uintptr_t>(binder.get_refs());
+                obj.cookie = reinterpret_cast<uintptr_t>(binder.unsafe_get());
             }
             return finish_flatten_binder(real, obj, out);
         }
-        
+
         // XXX How to deal?  In order to flatten the given binder,
         // we need to probe it for information, which requires a primary
         // reference...  but we don't have one.
@@ -215,39 +276,40 @@ status_t flatten_binder(const sp<ProcessState>& proc,
         // implementation we are using.
         LOGE("Unable to unflatten Binder weak reference!");
         obj.type = BINDER_TYPE_BINDER;
-        obj.binder = NULL;
-        obj.cookie = NULL;
+        obj.binder = 0;
+        obj.cookie = 0;
         return finish_flatten_binder(NULL, obj, out);
-    
+
     } else {
         obj.type = BINDER_TYPE_BINDER;
-        obj.binder = NULL;
-        obj.cookie = NULL;
+        obj.binder = 0;
+        obj.cookie = 0;
         return finish_flatten_binder(NULL, obj, out);
     }
 }
 
 inline static status_t finish_unflatten_binder(
-    BpBinder* proxy, const flat_binder_object& flat, const Parcel& in)
+    BpBinder* /*proxy*/, const flat_binder_object& /*flat*/,
+    const Parcel& /*in*/)
 {
     return NO_ERROR;
 }
-    
+
 status_t unflatten_binder(const sp<ProcessState>& proc,
     const Parcel& in, sp<IBinder>* out)
 {
     const flat_binder_object* flat = in.readObject(false);
-    
+
     if (flat) {
         switch (flat->type) {
             case BINDER_TYPE_BINDER:
-                *out = static_cast<IBinder*>(flat->cookie);
+                *out = reinterpret_cast<IBinder*>(flat->cookie);
                 return finish_unflatten_binder(NULL, *flat, in);
             case BINDER_TYPE_HANDLE:
                 *out = proc->getStrongProxyForHandle(flat->handle);
                 return finish_unflatten_binder(
                     static_cast<BpBinder*>(out->get()), *flat, in);
-        }        
+        }
     }
     return BAD_TYPE;
 }
@@ -256,17 +318,17 @@ status_t unflatten_binder(const sp<ProcessState>& proc,
     const Parcel& in, wp<IBinder>* out)
 {
     const flat_binder_object* flat = in.readObject(false);
-    
+
     if (flat) {
         switch (flat->type) {
             case BINDER_TYPE_BINDER:
-                *out = static_cast<IBinder*>(flat->cookie);
+                *out = reinterpret_cast<IBinder*>(flat->cookie);
                 return finish_unflatten_binder(NULL, *flat, in);
             case BINDER_TYPE_WEAK_BINDER:
-                if (flat->binder != NULL) {
+                if (flat->binder != 0) {
                     out->set_object_and_refs(
-                        static_cast<IBinder*>(flat->cookie),
-                        static_cast<RefBase::weakref_type*>(flat->binder));
+                        reinterpret_cast<IBinder*>(flat->cookie),
+                        reinterpret_cast<RefBase::weakref_type*>(flat->binder));
                 } else {
                     *out = NULL;
                 }
@@ -285,12 +347,28 @@ status_t unflatten_binder(const sp<ProcessState>& proc,
 
 Parcel::Parcel()
 {
+    LOG_ALLOC("Parcel %p: constructing", this);
     initState();
 }
 
 Parcel::~Parcel()
 {
     freeDataNoInit();
+    LOG_ALLOC("Parcel %p: destroyed", this);
+}
+
+size_t Parcel::getGlobalAllocSize() {
+    pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+    size_t size = gParcelGlobalAllocSize;
+    pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
+    return size;
+}
+
+size_t Parcel::getGlobalAllocCount() {
+    pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+    size_t count = gParcelGlobalAllocCount;
+    pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
+    return count;
 }
 
 const uint8_t* Parcel::data() const
@@ -326,29 +404,53 @@ size_t Parcel::dataCapacity() const
 
 status_t Parcel::setDataSize(size_t size)
 {
+    if (size > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     status_t err;
     err = continueWrite(size);
     if (err == NO_ERROR) {
         mDataSize = size;
-        LOGV("setDataSize Setting data size of %p to %d\n", this, mDataSize);
+        LOGV("setDataSize Setting data size of %p to %zu", this, mDataSize);
     }
     return err;
 }
 
 void Parcel::setDataPosition(size_t pos) const
 {
+    if (pos > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        abort();
+    }
+
     mDataPos = pos;
     mNextObjectHint = 0;
 }
 
 status_t Parcel::setDataCapacity(size_t size)
 {
+    if (size > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     if (size > mDataCapacity) return continueWrite(size);
     return NO_ERROR;
 }
 
 status_t Parcel::setData(const uint8_t* buffer, size_t len)
 {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     status_t err = restartWrite(len);
     if (err == NO_ERROR) {
         memcpy(const_cast<uint8_t*>(data()), buffer, len);
@@ -363,13 +465,19 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
     const sp<ProcessState> proc(ProcessState::self());
     status_t err;
     const uint8_t *data = parcel->mData;
-    const size_t *objects = parcel->mObjects;
+    const binder_size_t *objects = parcel->mObjects;
     size_t size = parcel->mObjectsSize;
     int startPos = mDataPos;
     int firstIndex = -1, lastIndex = -2;
 
     if (len == 0) {
         return NO_ERROR;
+    }
+
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
     }
 
     // range checks against the source parcel size
@@ -382,7 +490,7 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
     // Count objects in range
     for (int i = 0; i < (int) size; i++) {
         size_t off = objects[i];
-        if ((off >= offset) && (off < offset + len)) {
+        if ((off >= offset) && (off + sizeof(flat_binder_object) <= offset + len)) {
             if (firstIndex == -1) {
                 firstIndex = i;
             }
@@ -409,16 +517,17 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
     if (numObjects > 0) {
         // grow objects
         if (mObjectsCapacity < mObjectsSize + numObjects) {
-            int newSize = ((mObjectsSize + numObjects)*3)/2;
-            size_t *objects =
-                (size_t*)realloc(mObjects, newSize*sizeof(size_t));
-            if (objects == (size_t*)0) {
+            size_t newSize = ((mObjectsSize + numObjects)*3)/2;
+            if (newSize < mObjectsSize) return NO_MEMORY;   // overflow
+            binder_size_t *objects =
+                (binder_size_t*)realloc(mObjects, newSize*sizeof(binder_size_t));
+            if (objects == (binder_size_t*)0) {
                 return NO_MEMORY;
             }
             mObjects = objects;
             mObjectsCapacity = newSize;
         }
-        
+
         // append and acquire objects
         int idx = mObjectsSize;
         for (int i = firstIndex; i <= lastIndex; i++) {
@@ -428,14 +537,14 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
 
             flat_binder_object* flat
                 = reinterpret_cast<flat_binder_object*>(mData + off);
-            acquire_object(proc, *flat, this);
+            acquire_object(proc, *flat, this, &mOpenAshmemSize);
 
             if (flat->type == BINDER_TYPE_FD) {
                 // If this is a file descriptor, we need to dup it so the
                 // new Parcel now owns its own fd, and can declare that we
                 // officially know we have fds.
                 flat->handle = dup(flat->handle);
-                flat->cookie = (void*)1;
+                flat->cookie = 1;
                 mHasFds = mFdsKnown = true;
                 if (!mAllowFds) {
                     err = FDS_NOT_ALLOWED;
@@ -445,6 +554,11 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
     }
 
     return err;
+}
+
+bool Parcel::allowFds() const
+{
+    return mAllowFds;
 }
 
 bool Parcel::pushAllowFds(bool allowFds)
@@ -504,13 +618,13 @@ bool Parcel::enforceInterface(const String16& interface,
     if (str == interface) {
         return true;
     } else {
-        LOGW("**** enforceInterface() expected '%s' but read '%s'\n",
+        LOGW("**** enforceInterface() expected '%s' but read '%s'",
                 String8(interface).string(), String8(str).string());
         return false;
     }
 }
 
-const size_t* Parcel::objects() const
+const binder_size_t* Parcel::objects() const
 {
     return mObjects;
 }
@@ -532,12 +646,18 @@ void Parcel::setError(status_t err)
 
 status_t Parcel::finishWrite(size_t len)
 {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     //printf("Finish write of %d\n", len);
     mDataPos += len;
-    LOGV("finishWrite Setting data pos of %p to %d\n", this, mDataPos);
+    LOGV("finishWrite Setting data pos of %p to %zu", this, mDataPos);
     if (mDataPos > mDataSize) {
         mDataSize = mDataPos;
-        LOGV("finishWrite Setting data size of %p to %d\n", this, mDataSize);
+        LOGV("finishWrite Setting data size of %p to %zu", this, mDataSize);
     }
     //printf("New pos=%d, size=%d\n", mDataPos, mDataSize);
     return NO_ERROR;
@@ -545,6 +665,12 @@ status_t Parcel::finishWrite(size_t len)
 
 status_t Parcel::writeUnpadded(const void* data, size_t len)
 {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     size_t end = mDataPos + len;
     if (end < mDataPos) {
         // integer overflow
@@ -564,6 +690,12 @@ restart_write:
 
 status_t Parcel::write(const void* data, size_t len)
 {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     void* const d = writeInplace(len);
     if (d) {
         memcpy(d, data, len);
@@ -574,7 +706,13 @@ status_t Parcel::write(const void* data, size_t len)
 
 void* Parcel::writeInplace(size_t len)
 {
-    const size_t padded = PAD_SIZE(len);
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return NULL;
+    }
+
+    const size_t padded = pad_size(len);
 
     // sanity check for integer overflow
     if (mDataPos+padded < mDataPos) {
@@ -617,9 +755,57 @@ status_t Parcel::writeInt32(int32_t val)
     return writeAligned(val);
 }
 
+status_t Parcel::writeUint32(uint32_t val)
+{
+    return writeAligned(val);
+}
+
+status_t Parcel::writeInt32Array(size_t len, const int32_t *val) {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
+    if (!val) {
+        return writeInt32(-1);
+    }
+    status_t ret = writeInt32(static_cast<uint32_t>(len));
+    if (ret == NO_ERROR) {
+        ret = write(val, len * sizeof(*val));
+    }
+    return ret;
+}
+status_t Parcel::writeByteArray(size_t len, const uint8_t *val) {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
+    if (!val) {
+        return writeInt32(-1);
+    }
+    status_t ret = writeInt32(static_cast<uint32_t>(len));
+    if (ret == NO_ERROR) {
+        ret = write(val, len * sizeof(*val));
+    }
+    return ret;
+}
+
 status_t Parcel::writeInt64(int64_t val)
 {
     return writeAligned(val);
+}
+
+status_t Parcel::writeUint64(uint64_t val)
+{
+    return writeAligned(val);
+}
+
+status_t Parcel::writePointer(uintptr_t val)
+{
+    return writeAligned<binder_uintptr_t>(val);
 }
 
 status_t Parcel::writeFloat(float val)
@@ -627,15 +813,26 @@ status_t Parcel::writeFloat(float val)
     return writeAligned(val);
 }
 
+#if defined(__mips__) && defined(__mips_hard_float)
+
+status_t Parcel::writeDouble(double val)
+{
+    union {
+        double d;
+        unsigned long long ll;
+    } u;
+    u.d = val;
+    return writeAligned(u.ll);
+}
+
+#else
+
 status_t Parcel::writeDouble(double val)
 {
     return writeAligned(val);
 }
 
-status_t Parcel::writeIntPtr(intptr_t val)
-{
-    return writeAligned(val);
-}
+#endif
 
 status_t Parcel::writeCString(const char* str)
 {
@@ -662,7 +859,7 @@ status_t Parcel::writeString16(const String16& str)
 status_t Parcel::writeString16(const char16_t* str, size_t len)
 {
     if (str == NULL) return writeInt32(-1);
-    
+
     status_t err = writeInt32(len);
     if (err == NO_ERROR) {
         len *= sizeof(char16_t);
@@ -715,29 +912,43 @@ status_t Parcel::writeFileDescriptor(int fd, bool takeOwnership)
     flat_binder_object obj;
     obj.type = BINDER_TYPE_FD;
     obj.flags = 0x7f | FLAT_BINDER_FLAG_ACCEPTS_FDS;
+    obj.binder = 0; /* Don't pass uninitialized stack data to a remote process */
     obj.handle = fd;
-    obj.cookie = (void*) (takeOwnership ? 1 : 0);
+    obj.cookie = takeOwnership ? 1 : 0;
     return writeObject(obj, true);
 }
 
 status_t Parcel::writeDupFileDescriptor(int fd)
 {
-    return writeFileDescriptor(dup(fd), true /*takeOwnership*/);
+    int dupFd = dup(fd);
+    if (dupFd < 0) {
+        return -errno;
+    }
+    status_t err = writeFileDescriptor(dupFd, true /*takeOwnership*/);
+    if (err) {
+        close(dupFd);
+    }
+    return err;
 }
 
-status_t Parcel::writeBlob(size_t len, WritableBlob* outBlob)
+status_t Parcel::writeBlob(size_t len, bool mutableCopy, WritableBlob* outBlob)
 {
-    status_t status;
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
 
-    if (!mAllowFds || len <= IN_PLACE_BLOB_LIMIT) {
+    status_t status;
+    if (!mAllowFds || len <= BLOB_INPLACE_LIMIT) {
         LOGV("writeBlob: write in place");
-        status = writeInt32(0);
+        status = writeInt32(BLOB_INPLACE);
         if (status) return status;
 
         void* ptr = writeInplace(len);
         if (!ptr) return NO_MEMORY;
 
-        outBlob->init(false /*mapped*/, ptr, len);
+        outBlob->init(-1, ptr, len, false);
         return NO_ERROR;
     }
 
@@ -753,15 +964,17 @@ status_t Parcel::writeBlob(size_t len, WritableBlob* outBlob)
         if (ptr == MAP_FAILED) {
             status = -errno;
         } else {
-            result = ashmem_set_prot_region(fd, PROT_READ);
+            if (!mutableCopy) {
+                result = ashmem_set_prot_region(fd, PROT_READ);
+            }
             if (result < 0) {
                 status = result;
             } else {
-                status = writeInt32(1);
+                status = writeInt32(mutableCopy ? BLOB_ASHMEM_MUTABLE : BLOB_ASHMEM_IMMUTABLE);
                 if (!status) {
                     status = writeFileDescriptor(fd, true /*takeOwnership*/);
                     if (!status) {
-                        outBlob->init(true /*mapped*/, ptr, len);
+                        outBlob->init(fd, ptr, len, mutableCopy);
                         return NO_ERROR;
                     }
                 }
@@ -773,13 +986,28 @@ status_t Parcel::writeBlob(size_t len, WritableBlob* outBlob)
     return status;
 }
 
-status_t Parcel::write(const Flattenable& val)
+status_t Parcel::writeDupImmutableBlobFileDescriptor(int fd)
+{
+    // Must match up with what's done in writeBlob.
+    if (!mAllowFds) return FDS_NOT_ALLOWED;
+    status_t status = writeInt32(BLOB_ASHMEM_IMMUTABLE);
+    if (status) return status;
+    return writeDupFileDescriptor(fd);
+}
+
+status_t Parcel::write(const FlattenableHelperInterface& val)
 {
     status_t err;
 
     // size if needed
-    size_t len = val.getFlattenedSize();
-    size_t fd_count = val.getFdCount();
+    const size_t len = val.getFlattenedSize();
+    const size_t fd_count = val.getFdCount();
+
+    if ((len > INT32_MAX) || (fd_count > INT32_MAX)) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
 
     err = this->writeInt32(len);
     if (err) return err;
@@ -788,7 +1016,7 @@ status_t Parcel::write(const Flattenable& val)
     if (err) return err;
 
     // payload
-    void* buf = this->writeInplace(PAD_SIZE(len));
+    void* const buf = this->writeInplace(pad_size(len));
     if (buf == NULL)
         return BAD_VALUE;
 
@@ -816,20 +1044,21 @@ status_t Parcel::writeObject(const flat_binder_object& val, bool nullMetaData)
     if (enoughData && enoughObjects) {
 restart_write:
         *reinterpret_cast<flat_binder_object*>(mData+mDataPos) = val;
-        
-        // Need to write meta-data?
-        if (nullMetaData || val.binder != NULL) {
-            mObjects[mObjectsSize] = mDataPos;
-            acquire_object(ProcessState::self(), val, this);
-            mObjectsSize++;
-        }
-        
+
         // remember if it's a file descriptor
         if (val.type == BINDER_TYPE_FD) {
             if (!mAllowFds) {
+                // fail before modifying our object index
                 return FDS_NOT_ALLOWED;
             }
             mHasFds = mFdsKnown = true;
+        }
+
+        // Need to write meta-data?
+        if (nullMetaData || val.binder != 0) {
+            mObjects[mObjectsSize] = mDataPos;
+            acquire_object(ProcessState::self(), val, this, &mOpenAshmemSize);
+            mObjectsSize++;
         }
 
         return finishWrite(sizeof(flat_binder_object));
@@ -841,12 +1070,13 @@ restart_write:
     }
     if (!enoughObjects) {
         size_t newSize = ((mObjectsSize+2)*3)/2;
-        size_t* objects = (size_t*)realloc(mObjects, newSize*sizeof(size_t));
+        if (newSize < mObjectsSize) return NO_MEMORY;   // overflow
+        binder_size_t* objects = (binder_size_t*)realloc(mObjects, newSize*sizeof(binder_size_t));
         if (objects == NULL) return NO_MEMORY;
         mObjects = objects;
         mObjectsCapacity = newSize;
     }
-    
+
     goto restart_write;
 }
 
@@ -855,17 +1085,24 @@ status_t Parcel::writeNoException()
     return writeInt32(0);
 }
 
-void Parcel::remove(size_t start, size_t amt)
+void Parcel::remove(size_t /*start*/, size_t /*amt*/)
 {
     LOG_ALWAYS_FATAL("Parcel::remove() not yet implemented!");
 }
 
 status_t Parcel::read(void* outData, size_t len) const
 {
-    if ((mDataPos+PAD_SIZE(len)) >= mDataPos && (mDataPos+PAD_SIZE(len)) <= mDataSize) {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
+    if ((mDataPos+pad_size(len)) >= mDataPos && (mDataPos+pad_size(len)) <= mDataSize
+            && len <= pad_size(len)) {
         memcpy(outData, mData+mDataPos, len);
-        mDataPos += PAD_SIZE(len);
-        LOGV("read Setting data pos of %p to %d\n", this, mDataPos);
+        mDataPos += pad_size(len);
+        LOGV("read Setting data pos of %p to %zu", this, mDataPos);
         return NO_ERROR;
     }
     return NOT_ENOUGH_DATA;
@@ -873,10 +1110,17 @@ status_t Parcel::read(void* outData, size_t len) const
 
 const void* Parcel::readInplace(size_t len) const
 {
-    if ((mDataPos+PAD_SIZE(len)) >= mDataPos && (mDataPos+PAD_SIZE(len)) <= mDataSize) {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return NULL;
+    }
+
+    if ((mDataPos+pad_size(len)) >= mDataPos && (mDataPos+pad_size(len)) <= mDataSize
+            && len <= pad_size(len)) {
         const void* data = mData+mDataPos;
-        mDataPos += PAD_SIZE(len);
-        LOGV("readInplace Setting data pos of %p to %d\n", this, mDataPos);
+        mDataPos += pad_size(len);
+        LOGV("readInplace Setting data pos of %p to %zu", this, mDataPos);
         return data;
     }
     return NULL;
@@ -884,7 +1128,7 @@ const void* Parcel::readInplace(size_t len) const
 
 template<class T>
 status_t Parcel::readAligned(T *pArg) const {
-    COMPILE_TIME_ASSERT_FUNCTION_SCOPE(PAD_SIZE(sizeof(T)) == sizeof(T));
+    COMPILE_TIME_ASSERT_FUNCTION_SCOPE(PAD_SIZE_UNSAFE(sizeof(T)) == sizeof(T));
 
     if ((mDataPos+sizeof(T)) <= mDataSize) {
         const void* data = mData+mDataPos;
@@ -908,7 +1152,7 @@ T Parcel::readAligned() const {
 
 template<class T>
 status_t Parcel::writeAligned(T val) {
-    COMPILE_TIME_ASSERT_FUNCTION_SCOPE(PAD_SIZE(sizeof(T)) == sizeof(T));
+    COMPILE_TIME_ASSERT_FUNCTION_SCOPE(PAD_SIZE_UNSAFE(sizeof(T)) == sizeof(T));
 
     if ((mDataPos+sizeof(val)) <= mDataCapacity) {
 restart_write:
@@ -931,6 +1175,15 @@ int32_t Parcel::readInt32() const
     return readAligned<int32_t>();
 }
 
+status_t Parcel::readUint32(uint32_t *pArg) const
+{
+    return readAligned(pArg);
+}
+
+uint32_t Parcel::readUint32() const
+{
+    return readAligned<uint32_t>();
+}
 
 status_t Parcel::readInt64(int64_t *pArg) const
 {
@@ -943,6 +1196,32 @@ int64_t Parcel::readInt64() const
     return readAligned<int64_t>();
 }
 
+status_t Parcel::readUint64(uint64_t *pArg) const
+{
+    return readAligned(pArg);
+}
+
+uint64_t Parcel::readUint64() const
+{
+    return readAligned<uint64_t>();
+}
+
+status_t Parcel::readPointer(uintptr_t *pArg) const
+{
+    status_t ret;
+    binder_uintptr_t ptr;
+    ret = readAligned(&ptr);
+    if (!ret)
+        *pArg = ptr;
+    return ret;
+}
+
+uintptr_t Parcel::readPointer() const
+{
+    return readAligned<binder_uintptr_t>();
+}
+
+
 status_t Parcel::readFloat(float *pArg) const
 {
     return readAligned(pArg);
@@ -954,16 +1233,44 @@ float Parcel::readFloat() const
     return readAligned<float>();
 }
 
+#if defined(__mips__) && defined(__mips_hard_float)
+
+status_t Parcel::readDouble(double *pArg) const
+{
+    union {
+      double d;
+      unsigned long long ll;
+    } u;
+    u.d = 0;
+    status_t status;
+    status = readAligned(&u.ll);
+    *pArg = u.d;
+    return status;
+}
+
+double Parcel::readDouble() const
+{
+    union {
+      double d;
+      unsigned long long ll;
+    } u;
+    u.ll = readAligned<unsigned long long>();
+    return u.d;
+}
+
+#else
+
 status_t Parcel::readDouble(double *pArg) const
 {
     return readAligned(pArg);
 }
 
-
 double Parcel::readDouble() const
 {
     return readAligned<double>();
 }
+
+#endif
 
 status_t Parcel::readIntPtr(intptr_t *pArg) const
 {
@@ -986,8 +1293,8 @@ const char* Parcel::readCString() const
         const char* eos = reinterpret_cast<const char*>(memchr(str, 0, avail));
         if (eos) {
             const size_t len = eos - str;
-            mDataPos += PAD_SIZE(len+1);
-            LOGV("readCString Setting data pos of %p to %d\n", this, mDataPos);
+            mDataPos += pad_size(len+1);
+            LOGV("readCString Setting data pos of %p to %zu", this, mDataPos);
             return str;
         }
     }
@@ -1047,10 +1354,11 @@ int32_t Parcel::readExceptionCode() const
 {
   int32_t exception_code = readAligned<int32_t>();
   if (exception_code == EX_HAS_REPLY_HEADER) {
+    int32_t header_start = dataPosition();
     int32_t header_size = readAligned<int32_t>();
     // Skip over fat responses headers.  Not used (or propagated) in
     // native code
-    setDataPosition(dataPosition() + header_size);
+    setDataPosition(header_start + header_size);
     // And fat response headers are currently only used when there are no
     // exceptions, so return no error:
     return 0;
@@ -1068,6 +1376,10 @@ native_handle* Parcel::readNativeHandle() const
     if (err != NO_ERROR) return 0;
 
     native_handle* h = native_handle_create(numFds, numInts);
+    if (!h) {
+        return 0;
+    }
+
     for (int i=0 ; err==NO_ERROR && i<numFds ; i++) {
         h->data[i] = dup(readFileDescriptor());
         if (h->data[i] < 0) err = BAD_VALUE;
@@ -1088,47 +1400,55 @@ int Parcel::readFileDescriptor() const
     if (flat) {
         switch (flat->type) {
             case BINDER_TYPE_FD:
-                //LOGI("Returning file descriptor %ld from parcel %p\n", flat->handle, this);
+                //LOGI("Returning file descriptor %ld from parcel %p", flat->handle, this);
                 return flat->handle;
-        }        
+        }
     }
     return BAD_TYPE;
 }
 
 status_t Parcel::readBlob(size_t len, ReadableBlob* outBlob) const
 {
-    int32_t useAshmem;
-    status_t status = readInt32(&useAshmem);
+    int32_t blobType;
+    status_t status = readInt32(&blobType);
     if (status) return status;
 
-    if (!useAshmem) {
+    if (blobType == BLOB_INPLACE) {
         LOGV("readBlob: read in place");
         const void* ptr = readInplace(len);
         if (!ptr) return BAD_VALUE;
 
-        outBlob->init(false /*mapped*/, const_cast<void*>(ptr), len);
+        outBlob->init(-1, const_cast<void*>(ptr), len, false);
         return NO_ERROR;
     }
 
     LOGV("readBlob: read from ashmem");
+    bool isMutable = (blobType == BLOB_ASHMEM_MUTABLE);
     int fd = readFileDescriptor();
     if (fd == int(BAD_TYPE)) return BAD_VALUE;
 
-    void* ptr = ::mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
-    if (!ptr) return NO_MEMORY;
+    void* ptr = ::mmap(NULL, len, isMutable ? PROT_READ | PROT_WRITE : PROT_READ,
+            MAP_SHARED, fd, 0);
+    if (ptr == MAP_FAILED) return NO_MEMORY;
 
-    outBlob->init(true /*mapped*/, ptr, len);
+    outBlob->init(fd, ptr, len, isMutable);
     return NO_ERROR;
 }
 
-status_t Parcel::read(Flattenable& val) const
+status_t Parcel::read(FlattenableHelperInterface& val) const
 {
     // size
     const size_t len = this->readInt32();
     const size_t fd_count = this->readInt32();
 
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     // payload
-    void const* buf = this->readInplace(PAD_SIZE(len));
+    void const* const buf = this->readInplace(pad_size(len));
     if (buf == NULL)
         return BAD_VALUE;
 
@@ -1140,7 +1460,11 @@ status_t Parcel::read(Flattenable& val) const
     status_t err = NO_ERROR;
     for (size_t i=0 ; i<fd_count && err==NO_ERROR ; i++) {
         fds[i] = dup(this->readFileDescriptor());
-        if (fds[i] < 0) err = BAD_VALUE;
+        if (fds[i] < 0) {
+            err = BAD_VALUE;
+            LOGE("dup() failed in Parcel::read, i is %zu, fds[i] is %d, fd_count is %zu, error: %s",
+                i, fds[i], fd_count, strerror(errno));
+        }
     }
 
     if (err == NO_ERROR) {
@@ -1160,23 +1484,23 @@ const flat_binder_object* Parcel::readObject(bool nullMetaData) const
         const flat_binder_object* obj
                 = reinterpret_cast<const flat_binder_object*>(mData+DPOS);
         mDataPos = DPOS + sizeof(flat_binder_object);
-        if (!nullMetaData && (obj->cookie == NULL && obj->binder == NULL)) {
+        if (!nullMetaData && (obj->cookie == 0 && obj->binder == 0)) {
             // When transferring a NULL object, we don't write it into
             // the object list, so we don't want to check for it when
             // reading.
-            LOGV("readObject Setting data pos of %p to %d\n", this, mDataPos);
+            LOGV("readObject Setting data pos of %p to %zu", this, mDataPos);
             return obj;
         }
-        
+
         // Ensure that this object is valid...
-        size_t* const OBJS = mObjects;
+        binder_size_t* const OBJS = mObjects;
         const size_t N = mObjectsSize;
         size_t opos = mNextObjectHint;
-        
+
         if (N > 0) {
-            LOGV("Parcel %p looking for obj at %d, hint=%d\n",
+            LOGV("Parcel %p looking for obj at %zu, hint=%zu",
                  this, DPOS, opos);
-            
+
             // Start at the current hint position, looking for an object at
             // the current data position.
             if (opos < N) {
@@ -1188,27 +1512,27 @@ const flat_binder_object* Parcel::readObject(bool nullMetaData) const
             }
             if (OBJS[opos] == DPOS) {
                 // Found it!
-                LOGV("Parcel %p found obj %d at index %d with forward search",
+                LOGV("Parcel %p found obj %zu at index %zu with forward search",
                      this, DPOS, opos);
                 mNextObjectHint = opos+1;
-                LOGV("readObject Setting data pos of %p to %d\n", this, mDataPos);
+                LOGV("readObject Setting data pos of %p to %zu", this, mDataPos);
                 return obj;
             }
-        
+
             // Look backwards for it...
             while (opos > 0 && OBJS[opos] > DPOS) {
                 opos--;
             }
             if (OBJS[opos] == DPOS) {
                 // Found it!
-                LOGV("Parcel %p found obj %d at index %d with backward search",
+                LOGV("Parcel %p found obj %zu at index %zu with backward search",
                      this, DPOS, opos);
                 mNextObjectHint = opos+1;
-                LOGV("readObject Setting data pos of %p to %d\n", this, mDataPos);
+                LOGV("readObject Setting data pos of %p to %zu", this, mDataPos);
                 return obj;
             }
         }
-        LOGW("Attempt to read object from Parcel %p at offset %d that is not in the object list",
+        LOGW("Attempt to read object from Parcel %p at offset %zu that is not in the object list",
              this, DPOS);
     }
     return NULL;
@@ -1218,22 +1542,22 @@ void Parcel::closeFileDescriptors()
 {
     size_t i = mObjectsSize;
     if (i > 0) {
-        //LOGI("Closing file descriptors for %d objects...", mObjectsSize);
+        //LOGI("Closing file descriptors for %zu objects...", i);
     }
     while (i > 0) {
         i--;
         const flat_binder_object* flat
             = reinterpret_cast<flat_binder_object*>(mData+mObjects[i]);
         if (flat->type == BINDER_TYPE_FD) {
-            //LOGI("Closing fd: %ld\n", flat->handle);
+            //LOGI("Closing fd: %ld", flat->handle);
             close(flat->handle);
         }
     }
 }
 
-const uint8_t* Parcel::ipcData() const
+uintptr_t Parcel::ipcData() const
 {
-    return mData;
+    return reinterpret_cast<uintptr_t>(mData);
 }
 
 size_t Parcel::ipcDataSize() const
@@ -1241,9 +1565,9 @@ size_t Parcel::ipcDataSize() const
     return (mDataSize > mDataPos ? mDataSize : mDataPos);
 }
 
-const size_t* Parcel::ipcObjects() const
+uintptr_t Parcel::ipcObjects() const
 {
-    return mObjects;
+    return reinterpret_cast<uintptr_t>(mObjects);
 }
 
 size_t Parcel::ipcObjectsCount() const
@@ -1252,34 +1576,45 @@ size_t Parcel::ipcObjectsCount() const
 }
 
 void Parcel::ipcSetDataReference(const uint8_t* data, size_t dataSize,
-    const size_t* objects, size_t objectsCount, release_func relFunc, void* relCookie)
+    const binder_size_t* objects, size_t objectsCount, release_func relFunc, void* relCookie)
 {
+    binder_size_t minOffset = 0;
     freeDataNoInit();
     mError = NO_ERROR;
     mData = const_cast<uint8_t*>(data);
     mDataSize = mDataCapacity = dataSize;
-    //LOGI("setDataReference Setting data size of %p to %lu (pid=%d)\n", this, mDataSize, getpid());
+    //LOGI("setDataReference Setting data size of %p to %lu (pid=%d)", this, mDataSize, getpid());
     mDataPos = 0;
-    LOGV("setDataReference Setting data pos of %p to %d\n", this, mDataPos);
-    mObjects = const_cast<size_t*>(objects);
+    LOGV("setDataReference Setting data pos of %p to %zu", this, mDataPos);
+    mObjects = const_cast<binder_size_t*>(objects);
     mObjectsSize = mObjectsCapacity = objectsCount;
     mNextObjectHint = 0;
     mOwner = relFunc;
     mOwnerCookie = relCookie;
+    for (size_t i = 0; i < mObjectsSize; i++) {
+        binder_size_t offset = mObjects[i];
+        if (offset < minOffset) {
+            LOGE("%s: bad object offset %" PRIu64 " < %" PRIu64 "\n",
+                  __func__, (uint64_t)offset, (uint64_t)minOffset);
+            mObjectsSize = 0;
+            break;
+        }
+        minOffset = offset + sizeof(flat_binder_object);
+    }
     scanForFds();
 }
 
-void Parcel::print(TextOutput& to, uint32_t flags) const
+void Parcel::print(TextOutput& to, uint32_t /*flags*/) const
 {
     to << "Parcel(";
-    
+
     if (errorCheck() != NO_ERROR) {
         const status_t err = errorCheck();
-        to << "Error: " << (void*)err << " \"" << strerror(-err) << "\"";
+        to << "Error: " << (void*)(intptr_t)err << " \"" << strerror(-err) << "\"";
     } else if (dataSize() > 0) {
         const uint8_t* DATA = data();
         to << indent << HexDump(DATA, dataSize()) << dedent;
-        const size_t* OBJS = objects();
+        const binder_size_t* OBJS = objects();
         const size_t N = objectsCount();
         for (size_t i=0; i<N; i++) {
             const flat_binder_object* flat
@@ -1291,7 +1626,7 @@ void Parcel::print(TextOutput& to, uint32_t flags) const
     } else {
         to << "NULL";
     }
-    
+
     to << ")";
 }
 
@@ -1300,12 +1635,12 @@ void Parcel::releaseObjects()
     const sp<ProcessState> proc(ProcessState::self());
     size_t i = mObjectsSize;
     uint8_t* const data = mData;
-    size_t* const objects = mObjects;
+    binder_size_t* const objects = mObjects;
     while (i > 0) {
         i--;
         const flat_binder_object* flat
             = reinterpret_cast<flat_binder_object*>(data+objects[i]);
-        release_object(proc, *flat, this);
+        release_object(proc, *flat, this, &mOpenAshmemSize);
     }
 }
 
@@ -1314,12 +1649,12 @@ void Parcel::acquireObjects()
     const sp<ProcessState> proc(ProcessState::self());
     size_t i = mObjectsSize;
     uint8_t* const data = mData;
-    size_t* const objects = mObjects;
+    binder_size_t* const objects = mObjects;
     while (i > 0) {
         i--;
         const flat_binder_object* flat
             = reinterpret_cast<flat_binder_object*>(data+objects[i]);
-        acquire_object(proc, *flat, this);
+        acquire_object(proc, *flat, this, &mOpenAshmemSize);
     }
 }
 
@@ -1332,17 +1667,32 @@ void Parcel::freeData()
 void Parcel::freeDataNoInit()
 {
     if (mOwner) {
-        //LOGI("Freeing data ref of %p (pid=%d)\n", this, getpid());
+        LOG_ALLOC("Parcel %p: freeing other owner data", this);
+        //LOGI("Freeing data ref of %p (pid=%d)", this, getpid());
         mOwner(this, mData, mDataSize, mObjects, mObjectsSize, mOwnerCookie);
     } else {
+        LOG_ALLOC("Parcel %p: freeing allocated data", this);
         releaseObjects();
-        if (mData) free(mData);
+        if (mData) {
+            LOG_ALLOC("Parcel %p: freeing with %zu capacity", this, mDataCapacity);
+            pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+            gParcelGlobalAllocSize -= mDataCapacity;
+            gParcelGlobalAllocCount--;
+            pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
+            free(mData);
+        }
         if (mObjects) free(mObjects);
     }
 }
 
 status_t Parcel::growData(size_t len)
 {
+    if (len > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     size_t newSize = ((mDataSize+len)*3)/2;
     return (newSize <= mDataSize)
             ? (status_t) NO_MEMORY
@@ -1351,28 +1701,39 @@ status_t Parcel::growData(size_t len)
 
 status_t Parcel::restartWrite(size_t desired)
 {
+    if (desired > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     if (mOwner) {
         freeData();
         return continueWrite(desired);
     }
-    
+
     uint8_t* data = (uint8_t*)realloc(mData, desired);
     if (!data && desired > mDataCapacity) {
         mError = NO_MEMORY;
         return NO_MEMORY;
     }
-    
+
     releaseObjects();
-    
+
     if (data) {
+        LOG_ALLOC("Parcel %p: restart from %zu to %zu capacity", this, mDataCapacity, desired);
+        pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+        gParcelGlobalAllocSize += desired;
+        gParcelGlobalAllocSize -= mDataCapacity;
+        pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
         mData = data;
         mDataCapacity = desired;
     }
-    
+
     mDataSize = mDataPos = 0;
-    LOGV("restartWrite Setting data size of %p to %d\n", this, mDataSize);
-    LOGV("restartWrite Setting data pos of %p to %d\n", this, mDataPos);
-        
+    LOGV("restartWrite Setting data size of %p to %zu", this, mDataSize);
+    LOGV("restartWrite Setting data pos of %p to %zu", this, mDataPos);
+
     free(mObjects);
     mObjects = NULL;
     mObjectsSize = mObjectsCapacity = 0;
@@ -1380,12 +1741,18 @@ status_t Parcel::restartWrite(size_t desired)
     mHasFds = false;
     mFdsKnown = true;
     mAllowFds = true;
-    
+
     return NO_ERROR;
 }
 
 status_t Parcel::continueWrite(size_t desired)
 {
+    if (desired > INT32_MAX) {
+        // don't accept size_t values which may have come from an
+        // inadvertent conversion from a negative int.
+        return BAD_VALUE;
+    }
+
     // If shrinking, first adjust for any objects that appear
     // after the new data size.
     size_t objectsSize = mObjectsSize;
@@ -1400,7 +1767,7 @@ status_t Parcel::continueWrite(size_t desired)
             }
         }
     }
-    
+
     if (mOwner) {
         // If the size is going to zero, just release the owner's data.
         if (desired == 0) {
@@ -1415,11 +1782,13 @@ status_t Parcel::continueWrite(size_t desired)
             mError = NO_MEMORY;
             return NO_MEMORY;
         }
-        size_t* objects = NULL;
-        
+        binder_size_t* objects = NULL;
+
         if (objectsSize) {
-            objects = (size_t*)malloc(objectsSize*sizeof(size_t));
+            objects = (binder_size_t*)calloc(objectsSize, sizeof(binder_size_t));
             if (!objects) {
+                free(data);
+
                 mError = NO_MEMORY;
                 return NO_MEMORY;
             }
@@ -1431,21 +1800,27 @@ status_t Parcel::continueWrite(size_t desired)
             acquireObjects();
             mObjectsSize = oldObjectsSize;
         }
-        
+
         if (mData) {
             memcpy(data, mData, mDataSize < desired ? mDataSize : desired);
         }
         if (objects && mObjects) {
-            memcpy(objects, mObjects, objectsSize*sizeof(size_t));
+            memcpy(objects, mObjects, objectsSize*sizeof(binder_size_t));
         }
-        //LOGI("Freeing data ref of %p (pid=%d)\n", this, getpid());
+        //LOGI("Freeing data ref of %p (pid=%d)", this, getpid());
         mOwner(this, mData, mDataSize, mObjects, mObjectsSize, mOwnerCookie);
         mOwner = NULL;
+
+        LOG_ALLOC("Parcel %p: taking ownership of %zu capacity", this, desired);
+        pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+        gParcelGlobalAllocSize += desired;
+        gParcelGlobalAllocCount++;
+        pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
 
         mData = data;
         mObjects = objects;
         mDataSize = (mDataSize < desired) ? mDataSize : desired;
-        LOGV("continueWrite Setting data size of %p to %d\n", this, mDataSize);
+        LOGV("continueWrite Setting data size of %p to %zu", this, mDataSize);
         mDataCapacity = desired;
         mObjectsSize = mObjectsCapacity = objectsSize;
         mNextObjectHint = 0;
@@ -1461,10 +1836,10 @@ status_t Parcel::continueWrite(size_t desired)
                     // will need to rescan because we may have lopped off the only FDs
                     mFdsKnown = false;
                 }
-                release_object(proc, *flat, this);
+                release_object(proc, *flat, this, &mOpenAshmemSize);
             }
-            size_t* objects =
-                (size_t*)realloc(mObjects, objectsSize*sizeof(size_t));
+            binder_size_t* objects =
+                (binder_size_t*)realloc(mObjects, objectsSize*sizeof(binder_size_t));
             if (objects) {
                 mObjects = objects;
             }
@@ -1476,6 +1851,12 @@ status_t Parcel::continueWrite(size_t desired)
         if (desired > mDataCapacity) {
             uint8_t* data = (uint8_t*)realloc(mData, desired);
             if (data) {
+                LOG_ALLOC("Parcel %p: continue from %zu to %zu capacity", this, mDataCapacity,
+                        desired);
+                pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+                gParcelGlobalAllocSize += desired;
+                gParcelGlobalAllocSize -= mDataCapacity;
+                pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
                 mData = data;
                 mDataCapacity = desired;
             } else if (desired > mDataCapacity) {
@@ -1485,14 +1866,14 @@ status_t Parcel::continueWrite(size_t desired)
         } else {
             if (mDataSize > desired) {
                 mDataSize = desired;
-                LOGV("continueWrite Setting data size of %p to %d\n", this, mDataSize);
+                LOGV("continueWrite Setting data size of %p to %zu", this, mDataSize);
             }
             if (mDataPos > desired) {
                 mDataPos = desired;
-                LOGV("continueWrite Setting data pos of %p to %d\n", this, mDataPos);
+                LOGV("continueWrite Setting data pos of %p to %zu", this, mDataPos);
             }
         }
-        
+
     } else {
         // This is the first data.  Easy!
         uint8_t* data = (uint8_t*)malloc(desired);
@@ -1500,16 +1881,22 @@ status_t Parcel::continueWrite(size_t desired)
             mError = NO_MEMORY;
             return NO_MEMORY;
         }
-        
+
         if(!(mDataCapacity == 0 && mObjects == NULL
              && mObjectsCapacity == 0)) {
-            LOGE("continueWrite: %d/%p/%d/%d", mDataCapacity, mObjects, mObjectsCapacity, desired);
+            LOGE("continueWrite: %zu/%p/%zu/%zu", mDataCapacity, mObjects, mObjectsCapacity, desired);
         }
-        
+
+        LOG_ALLOC("Parcel %p: allocating with %zu capacity", this, desired);
+        pthread_mutex_lock(&gParcelGlobalAllocSizeLock);
+        gParcelGlobalAllocSize += desired;
+        gParcelGlobalAllocCount++;
+        pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
+
         mData = data;
         mDataSize = mDataPos = 0;
-        LOGV("continueWrite Setting data size of %p to %d\n", this, mDataSize);
-        LOGV("continueWrite Setting data pos of %p to %d\n", this, mDataPos);
+        LOGV("continueWrite Setting data size of %p to %zu", this, mDataSize);
+        LOGV("continueWrite Setting data pos of %p to %zu", this, mDataPos);
         mDataCapacity = desired;
     }
 
@@ -1518,13 +1905,14 @@ status_t Parcel::continueWrite(size_t desired)
 
 void Parcel::initState()
 {
+    LOG_ALLOC("Parcel %p: initState", this);
     mError = NO_ERROR;
     mData = 0;
     mDataSize = 0;
     mDataCapacity = 0;
     mDataPos = 0;
-    LOGV("initState Setting data size of %p to %d\n", this, mDataSize);
-    LOGV("initState Setting data pos of %p to %d\n", this, mDataPos);
+    LOGV("initState Setting data size of %p to %zu", this, mDataSize);
+    LOGV("initState Setting data pos of %p to %zu", this, mDataPos);
     mObjects = NULL;
     mObjectsSize = 0;
     mObjectsCapacity = 0;
@@ -1533,6 +1921,7 @@ void Parcel::initState()
     mFdsKnown = true;
     mAllowFds = true;
     mOwner = NULL;
+    mOpenAshmemSize = 0;
 }
 
 void Parcel::scanForFds() const
@@ -1550,10 +1939,23 @@ void Parcel::scanForFds() const
     mFdsKnown = true;
 }
 
+size_t Parcel::getBlobAshmemSize() const
+{
+    // This used to return the size of all blobs that were written to ashmem, now we're returning
+    // the ashmem currently referenced by this Parcel, which should be equivalent.
+    // TODO: Remove method once ABI can be changed.
+    return mOpenAshmemSize;
+}
+
+size_t Parcel::getOpenAshmemSize() const
+{
+    return mOpenAshmemSize;
+}
+
 // --- Parcel::Blob ---
 
 Parcel::Blob::Blob() :
-        mMapped(false), mData(NULL), mSize(0) {
+        mFd(-1), mData(NULL), mSize(0), mMutable(false) {
 }
 
 Parcel::Blob::~Blob() {
@@ -1561,22 +1963,24 @@ Parcel::Blob::~Blob() {
 }
 
 void Parcel::Blob::release() {
-    if (mMapped && mData) {
+    if (mFd != -1 && mData) {
         ::munmap(mData, mSize);
     }
     clear();
 }
 
-void Parcel::Blob::init(bool mapped, void* data, size_t size) {
-    mMapped = mapped;
+void Parcel::Blob::init(int fd, void* data, size_t size, bool isMutable) {
+    mFd = fd;
     mData = data;
     mSize = size;
+    mMutable = isMutable;
 }
 
 void Parcel::Blob::clear() {
-    mMapped = false;
+    mFd = -1;
     mData = NULL;
     mSize = 0;
+    mMutable = false;
 }
 
 }; // namespace android

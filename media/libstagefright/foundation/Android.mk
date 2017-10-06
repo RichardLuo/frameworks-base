@@ -15,7 +15,10 @@ LOCAL_SRC_FILES:=                 \
     base64.cpp                    \
     hexdump.cpp
 
+LOCAL_CFLAGS += -std=c++11
+
 LOCAL_C_INCLUDES:= \
+	bionic/libc/kernel/common \
     frameworks/base/include/media/stagefright/foundation
 
 LOCAL_SHARED_LIBRARIES := \

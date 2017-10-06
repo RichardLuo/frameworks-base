@@ -161,12 +161,12 @@ struct ResChunk_header
 {
     // Type identifier for this chunk.  The meaning of this value depends
     // on the containing chunk.
-    uint16_t type;
+    char16_t type;
 
     // Size of the chunk header (in bytes).  Adding this value to
     // the address of the chunk allows you to find its associated data
     // (if any).
-    uint16_t headerSize;
+    char16_t headerSize;
 
     // Total size of this chunk (in bytes).  This is the chunkSize plus
     // the size of any data associated with the chunk.  Adding this value
@@ -224,7 +224,7 @@ enum {
 struct Res_value
 {
     // Number of bytes in this structure.
-    uint16_t size;
+    char16_t size;
 
     // Always set to 0.
     uint8_t res0;
@@ -368,11 +368,11 @@ struct ResStringPool_ref
  * Definition for a pool of strings.  The data of this chunk is an
  * array of uint32_t providing indices into the pool, relative to
  * stringsStart.  At stringsStart are all of the UTF-16 strings
- * concatenated together; each starts with a uint16_t of the string's
+ * concatenated together; each starts with a char16_t of the string's
  * length and each ends with a 0x0000 terminator.  If a string is >
  * 32767 characters, the high bit of the length is set meaning to take
  * those 15 bits as a high word and it will be followed by another
- * uint16_t containing the low word.
+ * char16_t containing the low word.
  *
  * If styleCount is not zero, then immediately following the array of
  * uint32_t indices into the string table is another array of indices
@@ -472,7 +472,7 @@ private:
     const uint32_t*             mEntryStyles;
     const void*                 mStrings;
     char16_t**                  mCache;
-    uint32_t                    mStringPoolSize;    // number of uint16_t
+    uint32_t                    mStringPoolSize;    // number of char16_t
     const uint32_t*             mStyles;
     uint32_t                    mStylePoolSize;    // number of uint32_t
 };
@@ -568,24 +568,24 @@ struct ResXMLTree_attrExt
     struct ResStringPool_ref name;
     
     // Byte offset from the start of this structure where the attributes start.
-    uint16_t attributeStart;
+    char16_t attributeStart;
     
     // Size of the ResXMLTree_attribute structures that follow.
-    uint16_t attributeSize;
+    char16_t attributeSize;
     
     // Number of attributes associated with an ELEMENT.  These are
     // available as an array of ResXMLTree_attribute structures
     // immediately following this node.
-    uint16_t attributeCount;
+    char16_t attributeCount;
     
     // Index (1-based) of the "id" attribute. 0 if none.
-    uint16_t idIndex;
+    char16_t idIndex;
     
     // Index (1-based) of the "class" attribute. 0 if none.
-    uint16_t classIndex;
+    char16_t classIndex;
     
     // Index (1-based) of the "style" attribute. 0 if none.
-    uint16_t styleIndex;
+    char16_t styleIndex;
 };
 
 struct ResXMLTree_attribute
@@ -642,25 +642,25 @@ public:
 
     // These are available for all nodes:
     int32_t getCommentID() const;
-    const uint16_t* getComment(size_t* outLen) const;
+    const char16_t* getComment(size_t* outLen) const;
     uint32_t getLineNumber() const;
     
     // This is available for TEXT:
     int32_t getTextID() const;
-    const uint16_t* getText(size_t* outLen) const;
+    const char16_t* getText(size_t* outLen) const;
     ssize_t getTextValue(Res_value* outValue) const;
     
     // These are available for START_NAMESPACE and END_NAMESPACE:
     int32_t getNamespacePrefixID() const;
-    const uint16_t* getNamespacePrefix(size_t* outLen) const;
+    const char16_t* getNamespacePrefix(size_t* outLen) const;
     int32_t getNamespaceUriID() const;
-    const uint16_t* getNamespaceUri(size_t* outLen) const;
+    const char16_t* getNamespaceUri(size_t* outLen) const;
     
     // These are available for START_TAG and END_TAG:
     int32_t getElementNamespaceID() const;
-    const uint16_t* getElementNamespace(size_t* outLen) const;
+    const char16_t* getElementNamespace(size_t* outLen) const;
     int32_t getElementNameID() const;
-    const uint16_t* getElementName(size_t* outLen) const;
+    const char16_t* getElementName(size_t* outLen) const;
     
     // Remaining methods are for retrieving information about attributes
     // associated with a START_TAG:
@@ -669,14 +669,14 @@ public:
     
     // Returns -1 if no namespace, -2 if idx out of range.
     int32_t getAttributeNamespaceID(size_t idx) const;
-    const uint16_t* getAttributeNamespace(size_t idx, size_t* outLen) const;
+    const char16_t* getAttributeNamespace(size_t idx, size_t* outLen) const;
     
     int32_t getAttributeNameID(size_t idx) const;
-    const uint16_t* getAttributeName(size_t idx, size_t* outLen) const;
+    const char16_t* getAttributeName(size_t idx, size_t* outLen) const;
     uint32_t getAttributeNameResID(size_t idx) const;
     
     int32_t getAttributeValueStringID(size_t idx) const;
-    const uint16_t* getAttributeStringValue(size_t idx, size_t* outLen) const;
+    const char16_t* getAttributeStringValue(size_t idx, size_t* outLen) const;
     
     int32_t getAttributeDataType(size_t idx) const;
     int32_t getAttributeData(size_t idx) const;
@@ -805,9 +805,9 @@ struct ResTable_config
     union {
         struct {
             // Mobile country code (from SIM).  0 means "any".
-            uint16_t mcc;
+            char16_t mcc;
             // Mobile network code (from SIM).  0 means "any".
-            uint16_t mnc;
+            char16_t mnc;
         };
         uint32_t imsi;
     };
@@ -850,7 +850,7 @@ struct ResTable_config
         struct {
             uint8_t orientation;
             uint8_t touchscreen;
-            uint16_t density;
+            char16_t density;
         };
         uint32_t screenType;
     };
@@ -906,8 +906,8 @@ struct ResTable_config
     
     union {
         struct {
-            uint16_t screenWidth;
-            uint16_t screenHeight;
+            char16_t screenWidth;
+            char16_t screenHeight;
         };
         uint32_t screenSize;
     };
@@ -922,10 +922,10 @@ struct ResTable_config
     
     union {
         struct {
-            uint16_t sdkVersion;
+            char16_t sdkVersion;
             // For now minorVersion must always be 0!!!  Its meaning
             // is currently undefined.
-            uint16_t minorVersion;
+            char16_t minorVersion;
         };
         uint32_t version;
     };
@@ -968,15 +968,15 @@ struct ResTable_config
         struct {
             uint8_t screenLayout;
             uint8_t uiMode;
-            uint16_t smallestScreenWidthDp;
+            char16_t smallestScreenWidthDp;
         };
         uint32_t screenConfig;
     };
     
     union {
         struct {
-            uint16_t screenWidthDp;
-            uint16_t screenHeightDp;
+            char16_t screenWidthDp;
+            char16_t screenHeightDp;
         };
         uint32_t screenSizeDp;
     };
@@ -1619,7 +1619,7 @@ struct ResTable_typeSpec
     // Must be 0.
     uint8_t res0;
     // Must be 0.
-    uint16_t res1;
+    char16_t res1;
     
     // Number of uint32_t entry configuration masks that follow.
     uint32_t entryCount;
@@ -1661,7 +1661,7 @@ struct ResTable_type
     // Must be 0.
     uint8_t res0;
     // Must be 0.
-    uint16_t res1;
+    char16_t res1;
     
     // Number of uint32_t entry indices that follow.
     uint32_t entryCount;
@@ -1684,7 +1684,7 @@ struct ResTable_type
 struct ResTable_entry
 {
     // Number of bytes in this structure.
-    uint16_t size;
+    char16_t size;
 
     enum {
         // If set, this is a complex entry, holding a set of name/value
@@ -1694,7 +1694,7 @@ struct ResTable_entry
         // are allowed to reference it.
         FLAG_PUBLIC = 0x0002
     };
-    uint16_t flags;
+    char16_t flags;
     
     // Reference into ResTable_package::keyStrings identifying this entry.
     struct ResStringPool_ref key;
@@ -1850,7 +1850,7 @@ public:
      * @return ssize_t Either a >= 0 table index or a negative error code.
      */
     ssize_t getResource(uint32_t resID, Res_value* outValue, bool mayBeBag = false,
-                    uint16_t density = 0,
+                    char16_t density = 0,
                     uint32_t* outSpecFlags = NULL,
                     ResTable_config* outConfig = NULL) const;
 
@@ -1982,7 +1982,7 @@ public:
                                size_t defPackageLen = 0,
                                uint32_t* outTypeSpecFlags = NULL) const;
 
-    static bool expandResourceRef(const uint16_t* refStr, size_t refLen,
+    static bool expandResourceRef(const char16_t* refStr, size_t refLen,
                                   String16* outPackage,
                                   String16* outType,
                                   String16* outName,

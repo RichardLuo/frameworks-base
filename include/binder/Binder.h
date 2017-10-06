@@ -17,6 +17,8 @@
 #ifndef ANDROID_BINDER_H
 #define ANDROID_BINDER_H
 
+#include <atomic>
+#include <stdint.h>
 #include <binder/IBinder.h>
 
 // ---------------------------------------------------------------------------
@@ -69,7 +71,7 @@ private:
 
     class Extras;
 
-            Extras*     mExtras;
+    std::atomic<uintptr_t>   mExtras;  // should be atomic<Extras *>
             void*       mReserved0;
 };
 

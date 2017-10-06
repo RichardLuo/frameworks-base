@@ -104,8 +104,9 @@ using namespace android;
 
 ZipFileRO::~ZipFileRO() {
     free(mHashTable);
-    if (mDirectoryMap)
-        mDirectoryMap->release();
+    if (mDirectoryMap) {
+        // mDirectoryMap->release();
+    }
     if (mFd >= 0)
         TEMP_FAILURE_RETRY(close(mFd));
     if (mFileName)
@@ -331,7 +332,7 @@ bool ZipFileRO::parseZipArchive(void)
      * Create hash table.  We have a minimum 75% load factor, possibly as
      * low as 50% after we round off to a power of 2.
      */
-    mHashTableSize = roundUpPower2(1 + (numEntries * 4) / 3);
+    // mHashTableSize = roundUpPower2(1 + (numEntries * 4) / 3);
     mHashTable = (HashEntry*) calloc(mHashTableSize, sizeof(HashEntry));
 
     /*
@@ -656,7 +657,7 @@ FileMap* ZipFileRO::createEntryFileMap(ZipEntryRO entry) const
 
     newMap = new FileMap();
     if (!newMap->create(mFileName, mFd, offset, compLen, true)) {
-        newMap->release();
+        // newMap->release();
         return NULL;
     }
 
@@ -720,7 +721,7 @@ bool ZipFileRO::uncompressEntry(ZipEntryRO entry, void* buffer) const
     result = true;
 
 unmap:
-    file->release();
+    // file->release();
 bail:
     return result;
 }
@@ -771,7 +772,7 @@ bool ZipFileRO::uncompressEntry(ZipEntryRO entry, int fd) const
     result = true;
 
 unmap:
-    file->release();
+    // file->release();
 bail:
     return result;
 }

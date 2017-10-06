@@ -82,9 +82,9 @@ inline int isspace16(char16_t c) {
 // range checked; guaranteed to NUL-terminate within the stated number of available slots
 // NOTE: if this truncates the dst string due to running out of space, no attempt is
 // made to avoid splitting surrogate pairs.
-static void strcpy16_dtoh(uint16_t* dst, const uint16_t* src, size_t avail)
+static void strcpy16_dtoh(char16_t* dst, const char16_t* src, size_t avail)
 {
-    uint16_t* last = dst + avail - 1;
+    char16_t* last = dst + avail - 1;
     while (*src && (dst < last)) {
         char16_t s = dtohs(*src);
         *dst++ = s;
@@ -567,7 +567,7 @@ decodeLength(const uint8_t** str)
     return len;
 }
 
-const uint16_t* ResStringPool::stringAt(size_t idx, size_t* u16len) const
+const char16_t* ResStringPool::stringAt(size_t idx, size_t* u16len) const
 {
     if (mError == NO_ERROR && idx < mHeader->stringCount) {
         const bool isUTF8 = (mHeader->flags&ResStringPool_header::UTF8_FLAG) != 0;
@@ -625,8 +625,8 @@ const uint16_t* ResStringPool::stringAt(size_t idx, size_t* u16len) const
             }
         } else {
             LOGW("Bad string block: string #%d entry is at %d, past end at %d\n",
-                    (int)idx, (int)(off*sizeof(uint16_t)),
-                    (int)(mStringPoolSize*sizeof(uint16_t)));
+                    (int)idx, (int)(off*sizeof(char16_t)),
+                    (int)(mStringPoolSize*sizeof(char16_t)));
         }
     }
     return NULL;
@@ -652,8 +652,8 @@ const char* ResStringPool::string8At(size_t idx, size_t* outLen) const
             }
         } else {
             LOGW("Bad string block: string #%d entry is at %d, past end at %d\n",
-                    (int)idx, (int)(off*sizeof(uint16_t)),
-                    (int)(mStringPoolSize*sizeof(uint16_t)));
+                    (int)idx, (int)(off*sizeof(char16_t)),
+                    (int)(mStringPoolSize*sizeof(char16_t)));
         }
     }
     return NULL;
@@ -786,7 +786,7 @@ int32_t ResXMLParser::getCommentID() const
     return mCurNode != NULL ? dtohl(mCurNode->comment.index) : -1;
 }
 
-const uint16_t* ResXMLParser::getComment(size_t* outLen) const
+const char16_t* ResXMLParser::getComment(size_t* outLen) const
 {
     int32_t id = getCommentID();
     return id >= 0 ? mTree.mStrings.stringAt(id, outLen) : NULL;
@@ -805,7 +805,7 @@ int32_t ResXMLParser::getTextID() const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getText(size_t* outLen) const
+const char16_t* ResXMLParser::getText(size_t* outLen) const
 {
     int32_t id = getTextID();
     return id >= 0 ? mTree.mStrings.stringAt(id, outLen) : NULL;
@@ -828,7 +828,7 @@ int32_t ResXMLParser::getNamespacePrefixID() const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getNamespacePrefix(size_t* outLen) const
+const char16_t* ResXMLParser::getNamespacePrefix(size_t* outLen) const
 {
     int32_t id = getNamespacePrefixID();
     //printf("prefix=%d  event=%p\n", id, mEventCode);
@@ -843,7 +843,7 @@ int32_t ResXMLParser::getNamespaceUriID() const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getNamespaceUri(size_t* outLen) const
+const char16_t* ResXMLParser::getNamespaceUri(size_t* outLen) const
 {
     int32_t id = getNamespaceUriID();
     //printf("uri=%d  event=%p\n", id, mEventCode);
@@ -861,7 +861,7 @@ int32_t ResXMLParser::getElementNamespaceID() const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getElementNamespace(size_t* outLen) const
+const char16_t* ResXMLParser::getElementNamespace(size_t* outLen) const
 {
     int32_t id = getElementNamespaceID();
     return id >= 0 ? mTree.mStrings.stringAt(id, outLen) : NULL;
@@ -878,7 +878,7 @@ int32_t ResXMLParser::getElementNameID() const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getElementName(size_t* outLen) const
+const char16_t* ResXMLParser::getElementName(size_t* outLen) const
 {
     int32_t id = getElementNameID();
     return id >= 0 ? mTree.mStrings.stringAt(id, outLen) : NULL;
@@ -907,7 +907,7 @@ int32_t ResXMLParser::getAttributeNamespaceID(size_t idx) const
     return -2;
 }
 
-const uint16_t* ResXMLParser::getAttributeNamespace(size_t idx, size_t* outLen) const
+const char16_t* ResXMLParser::getAttributeNamespace(size_t idx, size_t* outLen) const
 {
     int32_t id = getAttributeNamespaceID(idx);
     //printf("attribute namespace=%d  idx=%d  event=%p\n", id, idx, mEventCode);
@@ -930,7 +930,7 @@ int32_t ResXMLParser::getAttributeNameID(size_t idx) const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getAttributeName(size_t idx, size_t* outLen) const
+const char16_t* ResXMLParser::getAttributeName(size_t idx, size_t* outLen) const
 {
     int32_t id = getAttributeNameID(idx);
     //printf("attribute name=%d  idx=%d  event=%p\n", id, idx, mEventCode);
@@ -962,7 +962,7 @@ int32_t ResXMLParser::getAttributeValueStringID(size_t idx) const
     return -1;
 }
 
-const uint16_t* ResXMLParser::getAttributeStringValue(size_t idx, size_t* outLen) const
+const char16_t* ResXMLParser::getAttributeStringValue(size_t idx, size_t* outLen) const
 {
     int32_t id = getAttributeValueStringID(idx);
     //XML_NOISY(printf("getAttributeValue 0x%x=0x%x\n", idx, id));
@@ -1100,7 +1100,7 @@ ResXMLParser::event_code_t ResXMLParser::nextNode()
         }
 
         mCurNode = next;
-        const uint16_t headerSize = dtohs(next->header.headerSize);
+        const char16_t headerSize = dtohs(next->header.headerSize);
         const uint32_t totalSize = dtohl(next->header.size);
         mCurExt = ((const uint8_t*)next) + headerSize;
         size_t minExtSize = 0;
@@ -1225,7 +1225,7 @@ status_t ResXMLTree::setTo(const void* data, size_t size, bool copyData)
             mError = err;
             goto done;
         }
-        const uint16_t type = dtohs(chunk->type);
+        const char16_t type = dtohs(chunk->type);
         const size_t size = dtohl(chunk->size);
         XML_NOISY(printf("Scanning @ %p: type=0x%x, size=0x%x\n",
                      (void*)(((uint32_t)chunk)-((uint32_t)mHeader)), type, size));
@@ -1289,7 +1289,7 @@ void ResXMLTree::uninit()
 
 status_t ResXMLTree::validateNode(const ResXMLTree_node* node) const
 {
-    const uint16_t eventCode = dtohs(node->header.type);
+    const char16_t eventCode = dtohs(node->header.type);
 
     status_t err = validate_chunk(
         &node->header, sizeof(ResXMLTree_node),
@@ -1301,7 +1301,7 @@ status_t ResXMLTree::validateNode(const ResXMLTree_node* node) const
             return NO_ERROR;
         }
 
-        const uint16_t headerSize = dtohs(node->header.headerSize);
+        const char16_t headerSize = dtohs(node->header.headerSize);
         const uint32_t size = dtohl(node->header.size);
         const ResXMLTree_attrExt* attrExt = (const ResXMLTree_attrExt*)
             (((const uint8_t*)node) + headerSize);
@@ -1329,7 +1329,7 @@ status_t ResXMLTree::validateNode(const ResXMLTree_node* node) const
 #if 0
     const bool isStart = dtohs(node->header.type) == RES_XML_START_ELEMENT_TYPE;
 
-    const uint16_t headerSize = dtohs(node->header.headerSize);
+    const char16_t headerSize = dtohs(node->header.headerSize);
     const uint32_t size = dtohl(node->header.size);
 
     if (headerSize >= (isStart ? sizeof(ResXMLTree_attrNode) : sizeof(ResXMLTree_node))) {
@@ -1917,7 +1917,7 @@ status_t ResTable::add(const void* data, size_t size, void* cookie,
                      dtohs(chunk->type), dtohs(chunk->headerSize), dtohl(chunk->size),
                      (void*)(((const uint8_t*)chunk) - ((const uint8_t*)header->header))));
         const size_t csize = dtohl(chunk->size);
-        const uint16_t ctype = dtohs(chunk->type);
+        const char16_t ctype = dtohs(chunk->type);
         if (ctype == RES_STRING_POOL_TYPE) {
             if (header->values.getError() != NO_ERROR) {
                 // Only use the first string chunk; ignore any others that
@@ -2054,7 +2054,7 @@ bool ResTable::getResourceName(uint32_t resID, resource_name* outName) const
     return false;
 }
 
-ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag, uint16_t density,
+ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag, char16_t density,
         uint32_t* outSpecFlags, ResTable_config* outConfig) const
 {
     if (mError != NO_ERROR) {
@@ -2443,7 +2443,7 @@ ssize_t ResTable::getBagLocked(uint32_t resID, const bag_entry** outBag,
             set = NULL;
         }
 
-        const uint16_t entrySize = dtohs(entry->size);
+        const char16_t entrySize = dtohs(entry->size);
         const uint32_t parent = entrySize >= sizeof(ResTable_map_entry)
             ? dtohl(((const ResTable_map_entry*)entry)->parent.ident) : 0;
         const uint32_t count = entrySize >= sizeof(ResTable_map_entry)
@@ -2830,7 +2830,7 @@ nope:
     return 0;
 }
 
-bool ResTable::expandResourceRef(const uint16_t* refStr, size_t refLen,
+bool ResTable::expandResourceRef(const char16_t* refStr, size_t refLen,
                                  String16* outPackage,
                                  String16* outType,
                                  String16* outName,
@@ -4175,7 +4175,7 @@ status_t ResTable::parsePackage(const ResTable_package* const pkg,
                          dtohs(chunk->type), dtohs(chunk->headerSize), dtohl(chunk->size),
                          (void*)(((const uint8_t*)chunk) - ((const uint8_t*)header->header))));
         const size_t csize = dtohl(chunk->size);
-        const uint16_t ctype = dtohs(chunk->type);
+        const char16_t ctype = dtohs(chunk->type);
         if (ctype == RES_TABLE_TYPE_SPEC_TYPE) {
             const ResTable_typeSpec* typeSpec = (const ResTable_typeSpec*)(chunk);
             err = validate_chunk(&typeSpec->header, sizeof(*typeSpec),
@@ -4623,7 +4623,7 @@ void ResTable::print(bool inclValues) const
                         continue;
                     }
                     char density[16];
-                    uint16_t dval = dtohs(type->config.density);
+                    char16_t dval = dtohs(type->config.density);
                     if (dval == ResTable_config::DENSITY_DEFAULT) {
                         strcpy(density, "def");
                     } else if (dval == ResTable_config::DENSITY_NONE) {
@@ -4856,7 +4856,7 @@ void ResTable::print(bool inclValues) const
                             continue;
                         }
                         
-                        uint16_t esize = dtohs(ent->size);
+                        char16_t esize = dtohs(ent->size);
                         if ((esize&0x3) != 0) {
                             printf("NON-INTEGER ResTable_entry SIZE: %p\n", (void*)esize);
                             continue;

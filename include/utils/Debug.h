@@ -35,11 +35,11 @@ template<> struct CompileTimeAssert<true> {};
 // ---------------------------------------------------------------------------
 
 #ifdef __cplusplus
-template<bool C, typename LSH, typename RHS> struct CompileTimeIfElse;
-template<typename LHS, typename RHS> 
-struct CompileTimeIfElse<true,  LHS, RHS> { typedef LHS TYPE; };
-template<typename LHS, typename RHS> 
-struct CompileTimeIfElse<false, LHS, RHS> { typedef RHS TYPE; };
+template<bool C, typename Lhs, typename Rhs> struct CompileTimeIfElse;
+template<typename Lhs, typename Rhs> 
+struct CompileTimeIfElse<true,  Lhs, Rhs> { typedef Lhs TYPE; };
+template<typename Lhs, typename Rhs> 
+struct CompileTimeIfElse<false, Lhs, Rhs> { typedef Rhs TYPE; };
 #endif
 
 // ---------------------------------------------------------------------------

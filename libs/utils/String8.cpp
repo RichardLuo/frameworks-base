@@ -14,16 +14,13 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
 #include <utils/String8.h>
-
 #include <utils/Log.h>
 #include <utils/Unicode.h>
 #include <utils/SharedBuffer.h>
 #include <utils/String16.h>
-#include <utils/TextOutput.h>
 #include <utils/threads.h>
-
-#include <private/utils/Static.h>
 
 #include <ctype.h>
 
@@ -38,6 +35,7 @@ namespace android {
 
 // Separator used by resource paths. This is not platform dependent contrary
 // to OS_PATH_SEPARATOR.
+#define OS_PATH_SEPARATOR '/'
 #define RES_PATH_SEPARATOR '/'
 
 static SharedBuffer* gEmptyStringBuf = NULL;
@@ -45,6 +43,8 @@ static char* gEmptyString = NULL;
 
 extern int gDarwinCantLoadAllObjects;
 int gDarwinIsReallyAnnoying;
+
+void initialize_string8();
 
 static inline char* getEmptyString()
 {
@@ -79,6 +79,9 @@ void terminate_string8()
 static char* allocFromUTF8(const char* in, size_t len)
 {
     if (len > 0) {
+        if (len == SIZE_MAX) {
+            return NULL;
+        }
         SharedBuffer* buf = SharedBuffer::alloc(len+1);
         LOG_ASSERT(buf, "Unable to allocate shared buffer");
         if (buf) {
@@ -141,6 +144,19 @@ static char* allocFromUTF32(const char32_t* in, size_t len)
 String8::String8()
     : mString(getEmptyString())
 {
+}
+
+String8::String8(StaticLinkage)
+    : mString(0)
+{
+    // this constructor is used when we can't rely on the static-initializers
+    // having run. In this case we always allocate an empty string. It's less
+    // efficient than using getEmptyString(), but we assume it's uncommon.
+
+    char* data = static_cast<char*>(
+            SharedBuffer::alloc(sizeof(char))->data());
+    data[0] = 0;
+    mString = data;
 }
 
 String8::String8(const String8& o)
@@ -311,8 +327,17 @@ status_t String8::appendFormat(const char* fmt, ...)
 
 status_t String8::appendFormatV(const char* fmt, va_list args)
 {
-    int result = NO_ERROR;
-    int n = vsnprintf(NULL, 0, fmt, args);
+    int n, result = NO_ERROR;
+    va_list tmp_args;
+
+    /* args is undefined after vsnprintf.
+     * So we need a copy here to avoid the
+     * second vsnprintf access undefined args.
+     */
+    va_copy(tmp_args, args);
+    n = vsnprintf(NULL, 0, fmt, tmp_args);
+    va_end(tmp_args);
+
     if (n != 0) {
         size_t oldLength = length();
         char* buf = lockBuffer(oldLength + n);
@@ -387,6 +412,32 @@ ssize_t String8::find(const char* other, size_t start) const
     return p ? p-mString : -1;
 }
 
+#if 0
+bool String8::removeAll(const char* other) {
+    ssize_t index = find(other);
+    if (index < 0) return false;
+
+    char* buf = lockBuffer(size());
+    if (!buf) return false; // out of memory
+
+    size_t skip = strlen(other);
+    size_t len = size();
+    size_t tail = index;
+    while (size_t(index) < len) {
+        ssize_t next = find(other, index + skip);
+        if (next < 0) {
+            next = len;
+        }
+
+        memmove(buf + tail, buf + index + skip, next - index - skip);
+        tail += next - index - skip;
+        index = next;
+    }
+    unlockBuffer(tail);
+    return true;
+}
+#endif
+
 void String8::toLower()
 {
     toLower(0, size());
@@ -448,12 +499,6 @@ int32_t String8::getUtf32At(size_t index, size_t *next_index) const
 void String8::getUtf32(char32_t* dst) const
 {
     utf8_to_utf32(mString, length(), dst);
-}
-
-TextOutput& operator<<(TextOutput& to, const String8& val)
-{
-    to << val.string();
-    return to;
 }
 
 // ---------------------------------------------------------------------------
@@ -536,7 +581,6 @@ char* String8::find_extension(void) const
 {
     const char* lastSlash;
     const char* lastDot;
-    int extLen;
     const char* const str = mString;
 
     // only look at the filename

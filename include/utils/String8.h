@@ -20,6 +20,7 @@
 #include <utils/Errors.h>
 #include <utils/SharedBuffer.h>
 #include <utils/Unicode.h>
+#include <utils/TypeHelpers.h>
 
 #include <string.h> // for strcmp
 #include <stdarg.h>
@@ -36,7 +37,16 @@ class TextOutput;
 class String8
 {
 public:
+    /* use String8(StaticLinkage) if you're statically linking against
+     * libutils and declaring an empty static String8, e.g.:
+     *
+     *   static String8 sAStaticEmptyString(String8::kEmptyString);
+     *   static String8 sAnotherStaticEmptyString(sAStaticEmptyString);
+     */
+    enum StaticLinkage { kEmptyString };
+
                                 String8();
+    explicit                    String8(StaticLinkage);
                                 String8(const String8& o);
     explicit                    String8(const char* o);
     explicit                    String8(const char* o, size_t numChars);
@@ -120,10 +130,18 @@ public:
             // start, or -1 if not found
             ssize_t             find(const char* other, size_t start = 0) const;
 
+            // return true if this string contains the specified substring
+    inline  bool                contains(const char* other) const;
+
+            /* // removes all occurrence of the specified substring */
+            /* // returns true if any were found and removed */
+            /* bool                removeAll(const char* other); */
+
             void                toLower();
             void                toLower(size_t start, size_t numChars);
             void                toUpper();
             void                toUpper(size_t start, size_t numChars);
+
 
     /*
      * These methods operate on the string as if it were a path name.
@@ -219,7 +237,9 @@ private:
             const char* mString;
 };
 
-TextOutput& operator<<(TextOutput& to, const String16& val);
+// String8 can be trivially moved using memcpy() because moving does not
+// require any change to the underlying SharedBuffer contents or reference count.
+ANDROID_TRIVIAL_MOVE_TRAIT(String8)
 
 // ---------------------------------------------------------------------------
 // No user servicable parts below.
@@ -266,6 +286,11 @@ inline size_t String8::bytes() const
 inline const SharedBuffer* String8::sharedBuffer() const
 {
     return SharedBuffer::bufferFromData(mString);
+}
+
+inline bool String8::contains(const char* other) const
+{
+    return find(other) >= 0;
 }
 
 inline String8& String8::operator=(const String8& other)

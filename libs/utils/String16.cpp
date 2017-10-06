@@ -16,14 +16,10 @@
 
 #include <utils/String16.h>
 
-#include <utils/Debug.h>
 #include <utils/Log.h>
 #include <utils/Unicode.h>
 #include <utils/String8.h>
-#include <utils/TextOutput.h>
 #include <utils/threads.h>
-
-#include <private/utils/Static.h>
 
 #include <memory.h>
 #include <stdio.h>
@@ -70,8 +66,6 @@ static char16_t* allocFromUTF8(const char* u8str, size_t u8len)
         return getEmptyString();
     }
 
-    const uint8_t* const u8end = u8cur + u8len;
-
     SharedBuffer* buf = SharedBuffer::alloc(sizeof(char16_t)*(u16len+1));
     if (buf) {
         u8cur = (const uint8_t*) u8str;
@@ -94,6 +88,19 @@ static char16_t* allocFromUTF8(const char* u8str, size_t u8len)
 String16::String16()
     : mString(getEmptyString())
 {
+}
+
+String16::String16(StaticLinkage)
+    : mString(0)
+{
+    // this constructor is used when we can't rely on the static-initializers
+    // having run. In this case we always allocate an empty string. It's less
+    // efficient than using getEmptyString(), but we assume it's uncommon.
+
+    char16_t* data = static_cast<char16_t*>(
+            SharedBuffer::alloc(sizeof(char16_t))->data());
+    data[0] = 0;
+    mString = data;
 }
 
 String16::String16(const String16& o)
@@ -407,12 +414,6 @@ status_t String16::remove(size_t len, size_t begin)
         return NO_ERROR;
     }
     return NO_MEMORY;
-}
-
-TextOutput& operator<<(TextOutput& to, const String16& val)
-{
-    to << String8(val).string();
-    return to;
 }
 
 }; // namespace android

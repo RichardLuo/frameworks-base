@@ -14,28 +14,39 @@
 
 # we have the common sources, plus some device-specific stuff
 sources := \
-    Binder.cpp \
-    BpBinder.cpp \
-    CursorWindow.cpp \
-    IInterface.cpp \
-    IMemory.cpp \
-    IPCThreadState.cpp \
-    IPermissionController.cpp \
-    IServiceManager.cpp \
-    MemoryDealer.cpp \
-    MemoryBase.cpp \
-    MemoryHeapBase.cpp \
-    MemoryHeapPmem.cpp \
-    Parcel.cpp \
-    PermissionCache.cpp \
-    ProcessState.cpp \
-    Static.cpp
+	AppOpsManager.cpp \
+	Binder.cpp \
+	BpBinder.cpp \
+	BufferedTextOutput.cpp \
+	CursorWindow.cpp \
+	Debug.cpp \
+	IAppOpsCallback.cpp \
+	IAppOpsService.cpp \
+	IBatteryStats.cpp \
+	IInterface.cpp \
+	IMemory.cpp \
+	IPCThreadState.cpp \
+	IPermissionController.cpp \
+	IProcessInfoService.cpp \
+	IServiceManager.cpp \
+	MemoryBase.cpp \
+	MemoryDealer.cpp \
+	MemoryHeapBase.cpp \
+	MemoryHeapPmem.cpp \
+	Parcel.cpp \
+	PermissionCache.cpp \
+	ProcessInfoService.cpp \
+	ProcessState.cpp \
+	Static.cpp \
+	TextOutput.cpp
+
 
 LOCAL_PATH:= $(call my-dir)
 
 include $(CLEAR_VARS)
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
+LOCAL_CFLAGS += -std=c++11
 LOCAL_C_INCLUDES += bionic/libc/kernel/common
 LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
 LOCAL_SRC_FILES := $(sources)
@@ -45,5 +56,6 @@ include $(CLEAR_VARS)
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
 LOCAL_SRC_FILES := $(sources)
+LOCAL_CFLAGS += -std=c++11
 LOCAL_C_INCLUDES += bionic/libc/kernel/common
 include $(BUILD_STATIC_LIBRARY)

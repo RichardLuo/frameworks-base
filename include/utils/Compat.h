@@ -19,27 +19,60 @@
 
 #include <unistd.h>
 
-/* Compatibility definitions for non-Linux (i.e., BSD-based) hosts. */
-#ifndef HAVE_OFF64_T
-#if _FILE_OFFSET_BITS < 64
-#error "_FILE_OFFSET_BITS < 64; large files are not supported on this platform"
-#endif /* _FILE_OFFSET_BITS < 64 */
+#if defined(__APPLE__)
 
-#ifndef ARCH_X86
+/* Mac OS has always had a 64-bit off_t, so it doesn't have off64_t. */
+
 typedef off_t off64_t;
 
 static inline off64_t lseek64(int fd, off64_t offset, int whence) {
     return lseek(fd, offset, whence);
 }
 
-#ifdef HAVE_PREAD
 static inline ssize_t pread64(int fd, void* buf, size_t nbytes, off64_t offset) {
     return pread(fd, buf, nbytes, offset);
 }
+
+#endif /* __APPLE__ */
+
+#if defined(_WIN32)
+#define O_CLOEXEC O_NOINHERIT
+#define O_NOFOLLOW 0
+#define DEFFILEMODE 0666
+#endif /* _WIN32 */
+
+#if defined(_WIN32)
+#define ZD "%ld"
+#define ZD_TYPE long
+#else
+#define ZD "%zd"
+#define ZD_TYPE ssize_t
 #endif
 
-#endif  // X86
+/*
+ * Needed for cases where something should be constexpr if possible, but not
+ * being constexpr is fine if in pre-C++11 code (such as a const static float
+ * member variable).
+ */
+#if __cplusplus >= 201103L
+#define CONSTEXPR constexpr
+#else
+#define CONSTEXPR
+#endif
 
-#endif /* !HAVE_OFF64_T */
+/*
+ * TEMP_FAILURE_RETRY is defined by some, but not all, versions of
+ * <unistd.h>. (Alas, it is not as standard as we'd hoped!) So, if it's
+ * not already defined, then define it here.
+ */
+#ifndef TEMP_FAILURE_RETRY
+/* Used to retry syscalls that can return EINTR. */
+#define TEMP_FAILURE_RETRY(exp) ({         \
+    typeof (exp) _rc;                      \
+    do {                                   \
+        _rc = (exp);                       \
+    } while (_rc == -1 && errno == EINTR); \
+    _rc; })
+#endif
 
 #endif /* __LIB_UTILS_COMPAT_H */

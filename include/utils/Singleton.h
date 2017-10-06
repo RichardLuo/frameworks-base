@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <utils/threads.h>
+#include <cutils/compiler.h>
 
 namespace android {
 // ---------------------------------------------------------------------------
@@ -64,9 +65,10 @@ private:
  */
 
 #define ANDROID_SINGLETON_STATIC_INSTANCE(TYPE)                 \
-    template class Singleton< TYPE >;                           \
-    template<> Mutex Singleton< TYPE >::sLock(Mutex::PRIVATE);  \
-    template<> TYPE* Singleton< TYPE >::sInstance(0);
+    template<> ::android::Mutex  \
+        (::android::Singleton< TYPE >::sLock)(::android::Mutex::PRIVATE);  \
+    template<> TYPE* ::android::Singleton< TYPE >::sInstance(0);  \
+    template class ::android::Singleton< TYPE >;
 
 
 // ---------------------------------------------------------------------------

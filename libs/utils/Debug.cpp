@@ -15,7 +15,6 @@
  */
 
 #include <utils/Debug.h>
-
 #include <utils/misc.h>
 
 #include <stdio.h>
