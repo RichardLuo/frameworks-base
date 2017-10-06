@@ -45,6 +45,7 @@
 #include <sys/prctl.h>
 #endif
 
+#include <cutils/gettid_wrapper.h>
 /*
  * ===========================================================================
  *      Thread wrappers
