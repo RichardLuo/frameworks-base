@@ -51,7 +51,7 @@ struct surface_flinger_cblk_t   // 4KB max
 
 // ---------------------------------------------------------------------------
 
-COMPILE_TIME_ASSERT(sizeof(surface_flinger_cblk_t) <= 4096)
+ACOMPILE_TIME_ASSERT(sizeof(surface_flinger_cblk_t) <= 4096)
 
 // ---------------------------------------------------------------------------
 }; // namespace android
