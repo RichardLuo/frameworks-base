@@ -51,7 +51,7 @@ commonSources:= \
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:= $(commonSources)
-
+LOCAL_CXX11_ENABLED := yes
 LOCAL_MODULE:= libutils
 
 LOCAL_CFLAGS += -DLIBUTILS_NATIVE=1 $(TOOL_CFLAGS)
@@ -71,7 +71,7 @@ include $(BUILD_HOST_STATIC_LIBRARY)
 # For the device
 # =====================================================
 include $(CLEAR_VARS)
-
+LOCAL_CXX11_ENABLED := yes
 
 # we have the common sources, plus some device-specific stuff
 LOCAL_SRC_FILES:= \
@@ -100,6 +100,7 @@ include $(BUILD_SHARED_LIBRARY)
 
 ifeq ($(TARGET_OS),linux)
 include $(CLEAR_VARS)
+LOCAL_CXX11_ENABLED := yes
 LOCAL_C_INCLUDES += external/zlib external/icu4c/common
 LOCAL_LDLIBS := -lrt -ldl -lpthread
 LOCAL_MODULE := libutils
