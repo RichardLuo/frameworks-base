@@ -1,5 +1,6 @@
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
+LOCAL_CXX11_ENABLED := yes
 
 LOCAL_SRC_FILES:=                 \
     AAtomizer.cpp                 \
@@ -15,10 +16,7 @@ LOCAL_SRC_FILES:=                 \
     base64.cpp                    \
     hexdump.cpp
 
-LOCAL_CFLAGS += -std=c++11
-
 LOCAL_C_INCLUDES:= \
-	bionic/libc/kernel/common \
     frameworks/base/include/media/stagefright/foundation
 
 LOCAL_SHARED_LIBRARIES := \

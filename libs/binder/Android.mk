@@ -44,18 +44,16 @@ sources := \
 LOCAL_PATH:= $(call my-dir)
 
 include $(CLEAR_VARS)
+LOCAL_CXX11_ENABLED := yes
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
-LOCAL_CFLAGS += -std=c++11
-LOCAL_C_INCLUDES += bionic/libc/kernel/common
 LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
 LOCAL_SRC_FILES := $(sources)
 include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
+LOCAL_CXX11_ENABLED := yes
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
 LOCAL_SRC_FILES := $(sources)
-LOCAL_CFLAGS += -std=c++11
-LOCAL_C_INCLUDES += bionic/libc/kernel/common
 include $(BUILD_STATIC_LIBRARY)

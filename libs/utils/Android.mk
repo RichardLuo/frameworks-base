@@ -95,14 +95,12 @@ LOCAL_SHARED_LIBRARIES := \
 	liblog \
 	libcutils \
 
-LOCAL_CFLAGS += -std=c++11
 LOCAL_MODULE:= libutils
 include $(BUILD_SHARED_LIBRARY)
 
 ifeq ($(TARGET_OS),linux)
 include $(CLEAR_VARS)
 LOCAL_C_INCLUDES += external/zlib external/icu4c/common
-LOCAL_CFLAGS += -std=c++11
 LOCAL_LDLIBS := -lrt -ldl -lpthread
 LOCAL_MODULE := libutils
 LOCAL_SRC_FILES := $(commonSources) BackupData.cpp BackupHelpers.cpp
