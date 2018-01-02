@@ -21,6 +21,8 @@
 
 #include <binder/BufferedTextOutput.h>
 #include <binder/IPCThreadState.h>
+
+#define NDEBUG
 #include <utils/Log.h>
 
 namespace android {
@@ -39,8 +41,8 @@ protected:
     virtual status_t writeLines(const struct iovec& vec, size_t N)
     {
         //android_writevLog(&vec, N);       <-- this is now a no-op
-        if (N != 1) LOGI("WARNING: writeLines N=%zu\n", N);
-        LOGI("%.*s", (int)vec.iov_len, (const char*) vec.iov_base);
+        if (N != 1) LOGV("WARNING: writeLines N=%zu\n", N);
+        LOGV("%.*s", (int)vec.iov_len, (const char*) vec.iov_base);
         return NO_ERROR;
     }
 };
