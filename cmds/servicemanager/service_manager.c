@@ -322,7 +322,7 @@ int svcmgr_handler(struct binder_state *bs,
         si = svclist;
         while ((n-- > 0) && si)
             si = si->next;
-        if (si) {
+        if (si && si->handle) {
             bio_put_string16(reply, si->name);
             return 0;
         }
