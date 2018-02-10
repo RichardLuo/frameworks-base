@@ -1086,7 +1086,7 @@ backup_helper_test_four()
     }
 
     if (readSnapshot.size() != 4) {
-        fprintf(stderr, "readSnapshot should be length 4 is %d\n", readSnapshot.size());
+        fprintf(stderr, "readSnapshot should be length 4 is %zd\n", readSnapshot.size());
         return 1;
     }
 
