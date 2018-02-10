@@ -46,19 +46,12 @@ public:
         joinThreadPool();
     }
 
-    static void publishAndJoinThreadPoolEx(const char *postfix = NULL) {
-        SERVICE *service = new SERVICE(postfix);
-        sp<IServiceManager> sm(defaultServiceManager());
-        sm->addService(String16(service->getName()), service);
-        joinThreadPool();
-    }
-
-
     static void instantiate() { publish(); }
 
     static status_t shutdown() { return NO_ERROR; }
 
-private:
+  protected:
+    
     static void joinThreadPool() {
         sp<ProcessState> ps(ProcessState::self());
         ps->startThreadPool();
