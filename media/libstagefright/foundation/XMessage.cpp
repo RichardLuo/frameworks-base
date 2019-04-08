@@ -60,7 +60,11 @@ void XMessage::freeItem(Item *item) {
             delete item->u.stringValue;
             break;
         }
-
+        case kTypeStdVector:
+        {
+            delete[] item->u.int32ArrayValue;
+            break;
+        }
         case kTypeObject:
         case kTypeMessage:
         {
@@ -147,6 +151,16 @@ void XMessage::setString(
     item->u.stringValue = new AString(s, len < 0 ? strlen(s) : len);
 }
 
+void XMessage::setStdVector(const char *name, const std::vector<int32_t> &vec) {
+    Item *item = allocateItem(name);
+    item->mType = kTypeStdVector;
+    item->u.int32ArrayValue = new int32_t[vec.size() + 1];
+    item->u.int32ArrayValue[0] = vec.size();
+    for (size_t i = 0; i < vec.size(); i++) {
+        item->u.int32ArrayValue[i + 1] = vec[i];
+    }
+}
+
 void XMessage::setString8(const char *name, const String8 &str) {
     setString(name, str.string());
 }
@@ -177,6 +191,18 @@ void XMessage::setRect(
     item->u.rectValue.mTop = top;
     item->u.rectValue.mRight = right;
     item->u.rectValue.mBottom = bottom;
+}
+
+bool XMessage::findStdVector(const char *name, std::vector<int32_t> *vec) const {
+    const Item *item = findItem(name, kTypeStdVector);
+    if (item) {
+        const int size = item->u.int32ArrayValue[0];
+        for (int i = 0; i < size; i++) {
+            vec->push_back(item->u.int32ArrayValue[i + 1]);
+        }
+        return true;
+    }
+    return false;
 }
 
 bool XMessage::findString(const char *name, AString *value) const {
@@ -458,6 +484,17 @@ sp<XMessage> XMessage::fromParcel(const Parcel &parcel) {
                 break;
             }
 
+            case kTypeStdVector:
+            {
+                const int sz = parcel.readInt32();
+                item->u.int32ArrayValue = new int32_t[sz + 1];
+                item->u.int32ArrayValue[0] = sz;
+                for (int i = 0; i < sz; i++) {
+                    item->u.int32ArrayValue[i + 1] = parcel.readInt32();
+                }
+                break;
+            }
+
             case kTypeMessage:
             {
                 sp<XMessage> subMsg = XMessage::fromParcel(parcel);
@@ -528,6 +565,16 @@ void XMessage::writeToParcel(Parcel *parcel) const {
             case kTypeMessage:
             {
                 static_cast<XMessage *>(item.u.refValue)->writeToParcel(parcel);
+                break;
+            }
+
+            case kTypeStdVector:
+            {
+                const int sz = item.u.int32ArrayValue[0];
+                parcel->writeInt32(sz);
+                for (int i = 0; i < sz; i++) {
+                    parcel->writeInt32(item.u.int32ArrayValue[i+1]);
+                }
                 break;
             }
 
