@@ -150,6 +150,18 @@ struct svcinfo *find_svc(const uint16_t *s16, size_t len)
     return NULL;
 }
 
+static uint32_t get_svc_list_length() {
+    uint32_t len = 0;
+    struct svcinfo *si;
+    for (si = svclist; si != NULL; si = si->next) {
+        if (si->handle) {
+            len++;
+        }
+    }
+    return len;
+}
+
+
 void svcinfo_death(struct binder_state *bs, void *ptr)
 {
     struct svcinfo *si = (struct svcinfo* ) ptr;
@@ -312,21 +324,23 @@ int svcmgr_handler(struct binder_state *bs,
         break;
 
     case SVC_MGR_LIST_SERVICES: {
-        uint32_t n = bio_get_uint32(msg);
-
+        // uint32_t n = bio_get_uint32(msg);
         if (!svc_can_list(txn->sender_pid)) {
             ALOGE("list_service() uid=%d - PERMISSION DENIED\n",
                     txn->sender_euid);
             return -1;
-        }
-        si = svclist;
-        while ((n-- > 0) && si)
-            si = si->next;
-        if (si && si->handle) {
-            bio_put_string16(reply, si->name);
+        } else {
+            const uint32_t n = get_svc_list_length();
+            bio_put_uint32(reply, n);
+            if (n > 0) {
+                for (si = svclist; si != NULL; si = si->next) {
+                    if (si->handle) {
+                        bio_put_string16(reply, si->name);
+                    }
+                }
+            }
             return 0;
         }
-        return -1;
     }
     default:
         ALOGE("unknown code %d\n", txn->code);
