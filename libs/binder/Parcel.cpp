@@ -44,6 +44,9 @@
 #include <limits.h>
 #include <sys/mman.h>
 
+//#define LOG_NDEBUG 0
+#include <utils/Log.h>
+
 #ifndef INT32_MAX
 #define INT32_MAX ((int32_t)(2147483647))
 #endif
@@ -848,7 +851,24 @@ status_t Parcel::writeString8(const String8& str)
     if (str.bytes() > 0 && err == NO_ERROR) {
         err = write(str.string(), str.bytes()+1);
     }
-    return err;
+    if (err) {
+        LOG_EXIT("writeString8 error:%d bytes:%zd", err, str.bytes());
+    } else {
+        return err;
+    }
+}
+
+status_t Parcel::writeStdString(const std::string& str)
+{
+    status_t err = writeInt32(str.size());
+    if (str.size() > 0 && err == NO_ERROR) {
+        err = write(str.c_str(), str.size());
+    }
+    if (err) {
+        LOG_EXIT("writeStdString error:%d size:%zd", err, str.size());
+    } else {
+        return err;
+    }
 }
 
 status_t Parcel::writeString16(const String16& str)
@@ -1310,6 +1330,17 @@ String8 Parcel::readString8() const
         if (str) return String8(str, size);
     }
     return String8();
+}
+
+std::string Parcel::readStdString() const
+{
+    int32_t size = readInt32();
+    // watch for potential int overflow adding 1 for trailing NUL
+    if (size > 0 && size < INT32_MAX) {
+        const char* str = (const char*)readInplace(size+1);
+        if (str) return std::string(str, size);
+    }
+    return std::string();
 }
 
 String16 Parcel::readString16() const

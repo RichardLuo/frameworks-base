@@ -23,6 +23,7 @@
 #include <utils/String16.h>
 #include <utils/Vector.h>
 #include <utils/Flattenable.h>
+#include <string>
 #include "linux/binder.h"
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,9 @@ public:
     status_t            writeInt32Array(size_t len, const int32_t *val);
     status_t            writeByteArray(size_t len, const uint8_t *val);
 
+    status_t            writeStdString(const std::string& str);
+
+
     template<typename T>
     status_t            write(const Flattenable<T>& val);
 
@@ -176,6 +180,8 @@ public:
     const char16_t*     readString16Inplace(size_t* outLen) const;
     sp<IBinder>         readStrongBinder() const;
     wp<IBinder>         readWeakBinder() const;
+
+    std::string         readStdString() const;
 
     template<typename T>
     status_t            read(Flattenable<T>& val) const;
