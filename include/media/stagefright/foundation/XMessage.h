@@ -21,6 +21,7 @@
 #include <media/stagefright/foundation/ABase.h>
 #include <utils/RefBase.h>
 #include <vector>
+#include <string>
 
 namespace android {
 
@@ -52,6 +53,7 @@ struct XMessage : public RefBase {
     void setDouble(const char *name, double value);
     void setPointer(const char *name, void *value);
     void setString8(const char *name, const String8 &str);
+    void setStdString(const char *name, const std::string &str);
     void setString(const char *name, const char *s, ssize_t len = -1);
     void setObject(const char *name, const sp<RefBase> &obj);
     void setMessage(const char *name, const sp<XMessage> &obj);
@@ -76,6 +78,8 @@ struct XMessage : public RefBase {
     bool findString8(const char *name, String8 *value) const;
     bool findObject(const char *name, sp<RefBase> *obj) const;
     bool findMessage(const char *name, sp<XMessage> *obj) const;
+
+    bool findStdString(const char *name, std::string *value) const;
     bool findStdVector(const char *name, std::vector<int32_t> *vec) const;
 
     bool findRect(const char *name,
@@ -109,6 +113,7 @@ private:
         kTypeMessage,
         kTypeRect,
         kTypeStdVector,
+        kTypeStdString,
     };
 
     uint32_t mWhat;
@@ -129,6 +134,7 @@ private:
             AString *stringValue;
             Rect rectValue;
             int32_t *int32ArrayValue;
+            std::string *stdStringValue;
         } u;
         const char *mName;
         Type mType;
