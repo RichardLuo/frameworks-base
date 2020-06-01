@@ -862,7 +862,7 @@ status_t Parcel::writeStdString(const std::string& str)
 {
     status_t err = writeInt32(str.size());
     if (str.size() > 0 && err == NO_ERROR) {
-        err = write(str.c_str(), str.size());
+        err = write(&str[0], str.size());
     }
     if (err) {
         LOG_EXIT("writeStdString error:%d size:%zd", err, str.size());
@@ -1332,15 +1332,17 @@ String8 Parcel::readString8() const
     return String8();
 }
 
-std::string Parcel::readStdString() const
-{
+std::string Parcel::readStdString() const {
     int32_t size = readInt32();
     // watch for potential int overflow adding 1 for trailing NUL
-    if (size > 0 && size < INT32_MAX) {
-        const char* str = (const char*)readInplace(size+1);
-        if (str) return std::string(str, size);
+    if (0 < size && size < INT32_MAX) {
+        const char* str = (const char*)readInplace(size);
+        if (str) {
+            return std::string(str, size);
+        }
+    } else {
+        return std::string();
     }
-    return std::string();
 }
 
 String16 Parcel::readString16() const
