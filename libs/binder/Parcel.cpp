@@ -867,7 +867,7 @@ status_t Parcel::writeStdString(const std::string& str)
     if (err) {
         LOG_EXIT("writeStdString error:%d size:%zd", err, str.size());
     } else {
-        return err;
+        return NO_ERROR;
     }
 }
 
@@ -1339,6 +1339,8 @@ std::string Parcel::readStdString() const {
         const char* str = (const char*)readInplace(size);
         if (str) {
             return std::string(str, size);
+        } else {
+            return std::string();
         }
     } else {
         return std::string();
@@ -1350,7 +1352,7 @@ String16 Parcel::readString16() const
     size_t len;
     const char16_t* str = readString16Inplace(&len);
     if (str) return String16(str, len);
-    LOGE("Reading a NULL string not supported here.");
+    LOGE("Reading a NULL String16!");
     return String16();
 }
 
