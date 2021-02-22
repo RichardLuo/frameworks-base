@@ -209,48 +209,62 @@ int do_add_service(struct binder_state *bs,
                    pid_t spid)
 {
     struct svcinfo *si;
-
-    //ALOGI("add_service('%s',%x,%s) uid=%d\n", str8(s, len), handle,
-    //        allow_isolated ? "allow_isolated" : "!allow_isolated", uid);
+    
+    ALOGI("add_service('%s',%x,%s) uid=%d\n", str8(s, len), handle,
+          allow_isolated ? "allow_isolated" : "!allow_isolated", uid);
 
     if (!handle || (len == 0) || (len > 127))
         return -1;
 
     if (!svc_can_register(s, len, spid)) {
         ALOGE("add_service('%s',%x) uid=%d - PERMISSION DENIED\n",
-             str8(s, len), handle, uid);
+              str8(s, len), handle, uid);
         return -1;
     }
 
     si = find_svc(s, len);
     if (si) {
+        ALOGE("found old node, ('%s',%x) uid=%d \n",
+              str8(s, len), handle, uid);
         if (si->handle) {
             ALOGE("add_service('%s',%x) uid=%d - ALREADY REGISTERED, OVERRIDE\n",
-                 str8(s, len), handle, uid);
+                  str8(s, len), handle, uid);
             svcinfo_death(bs, si);
+        } else {
+            si->handle = handle;
         }
-        si->handle = handle;
     } else {
         si = malloc(sizeof(*si) + (len + 1) * sizeof(uint16_t));
         if (!si) {
             ALOGE("add_service('%s',%x) uid=%d - OUT OF MEMORY\n",
-                 str8(s, len), handle, uid);
+                  str8(s, len), handle, uid);
             return -1;
+        } else {
+            ALOGE("malloced new node, ('%s',%x) uid=%d \n",
+                  str8(s, len), handle, uid);
+            si->handle = handle;
+            si->len = len;
+            memcpy(si->name, s, (len + 1) * sizeof(uint16_t));
+            si->name[len] = '\0';
+            si->death.func = (void*) svcinfo_death;
+            si->death.ptr = si;
+            si->allow_isolated = allow_isolated;
+            si->next = svclist;
+            svclist = si;
         }
-        si->handle = handle;
-        si->len = len;
-        memcpy(si->name, s, (len + 1) * sizeof(uint16_t));
-        si->name[len] = '\0';
-        si->death.func = (void*) svcinfo_death;
-        si->death.ptr = si;
-        si->allow_isolated = allow_isolated;
-        si->next = svclist;
-        svclist = si;
     }
 
     binder_acquire(bs, handle);
     binder_link_to_death(bs, handle, &si->death);
     return 0;
+}
+
+static void dump_svc_list(void) {
+    int i = 0;
+    struct svcinfo *si;
+    for (si = svclist; si != NULL; si = si->next, i++) {
+        ALOGE("service[%d]: ('%s', %x) \n", i, str8(si->name, si->len), si->handle);
+    }
 }
 
 int svcmgr_handler(struct binder_state *bs,
@@ -265,8 +279,8 @@ int svcmgr_handler(struct binder_state *bs,
     uint32_t strict_policy;
     int allow_isolated;
 
-    //ALOGI("target=%p code=%d pid=%d uid=%d\n",
-    //      (void*) txn->target.ptr, txn->code, txn->sender_pid, txn->sender_euid);
+    ALOGI("target=%p code=%d pid=%d uid=%d\n",
+          (void*) txn->target.ptr, txn->code, txn->sender_pid, txn->sender_euid);
 
     if (txn->target.ptr != BINDER_SERVICE_MANAGER)
         return -1;
@@ -314,6 +328,7 @@ int svcmgr_handler(struct binder_state *bs,
     case SVC_MGR_ADD_SERVICE:
         s = bio_get_string16(msg, &len);
         if (s == NULL) {
+            ALOGE("got null string16!");
             return -1;
         }
         handle = bio_get_ref(msg);
@@ -330,9 +345,11 @@ int svcmgr_handler(struct binder_state *bs,
                     txn->sender_euid);
             return -1;
         } else {
+            dump_svc_list();
             const uint32_t n = get_svc_list_length();
             bio_put_uint32(reply, n);
             if (n > 0) {
+                ALOGE("num of services %u \n", n);
                 for (si = svclist; si != NULL; si = si->next) {
                     if (si->handle) {
                         bio_put_string16(reply, si->name);
