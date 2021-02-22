@@ -12,6 +12,9 @@
 
 #include "binder.h"
 
+#define ALOGI(x...) fprintf(stderr, "svcmgr: " x)
+#define ALOGE(x...) fprintf(stderr, "svcmgr: " x)
+
 #define MAX_BIO_SIZE (1 << 30)
 
 #define TRACE 1
@@ -239,7 +242,7 @@ int binder_parse(struct binder_state *bs, struct binder_io *bio,
             }
             binder_dump_txn(txn);
             if (func) {
-                unsigned rdata[256/4];
+                unsigned rdata[2048];
                 struct binder_io msg;
                 struct binder_io reply;
                 int res;
@@ -444,6 +447,7 @@ static void *bio_alloc(struct binder_io *bio, size_t size)
 {
     size = (size + 3) & (~3);
     if (size > bio->data_avail) {
+        ALOGE("size:%zd bio->data_avail:%zd", size, bio->data_avail);
         bio->flags |= BIO_F_OVERFLOW;
         return NULL;
     } else {
@@ -533,6 +537,7 @@ void bio_put_string16(struct binder_io *bio, const uint16_t *str)
 
     if (!str) {
         bio_put_uint32(bio, 0xffffffff);
+        ALOGE("NULL str \n");
         return;
     }
 
@@ -541,6 +546,7 @@ void bio_put_string16(struct binder_io *bio, const uint16_t *str)
 
     if (len >= (MAX_BIO_SIZE / sizeof(uint16_t))) {
         bio_put_uint32(bio, 0xffffffff);
+        ALOGE("invalid len %zd \n", len);
         return;
     }
 
@@ -548,8 +554,12 @@ void bio_put_string16(struct binder_io *bio, const uint16_t *str)
     bio_put_uint32(bio, (uint32_t) len);
     len = (len + 1) * sizeof(uint16_t);
     ptr = bio_alloc(bio, len);
-    if (ptr)
+    if (!ptr) {
+        ALOGE("NULL ptr! \n");
+    } else {
+        ALOGE("memcpy str len %zd \n", len);
         memcpy(ptr, str, len);
+    }
 }
 
 void bio_put_string16_x(struct binder_io *bio, const char *_str)
